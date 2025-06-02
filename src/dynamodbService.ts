@@ -346,6 +346,7 @@ const db = {
     try {
       const dbObjectivesList: Response<Objective[]> = await this.getObjectiveList(userId);
       if(dbObjectivesList.WasAnError || !dbObjectivesList.Data) return { WasAnError: true, Code: dbObjectivesList.Code?? Codes.InternalServerError, Message: dbObjectivesList.Message?? 'Problem trying to get objectives list from database.'};
+      log.d('db - got obj list');
 
       let dbObjectives: Objective[] = dbObjectivesList.Data;
       let dbItems: Item[] = []
@@ -355,6 +356,7 @@ const db = {
 
         dbItems.push(...rtnItemList.Data);
       }
+      log.d('db - adding items to dbItems');
 
       //! DELETE OBJECTIVES
       if(objectivesList.DeleteObjectives) {
@@ -366,6 +368,7 @@ const db = {
           }
         }
       }
+      log.d('db - obj deleted');
 
       //! DELETE ITEMS
       if(objectivesList.DeleteItems) {
@@ -377,6 +380,7 @@ const db = {
           }
         }
       }
+      log.d('db - deletedItems');
 
       //! PUT ITEMS
       if(objectivesList.Items) {
@@ -403,6 +407,7 @@ const db = {
           }
         }
       }
+      log.d('db - items putted');
 
       //! PUT OBJECTIVES
       if(objectivesList.Objectives) {
@@ -427,9 +432,11 @@ const db = {
           }
         }
       }
+      log.d('db - objs putted');
 
       const newDBObjectivesList: Response<Objective[]> = await this.getObjectiveList(userId);
       if(newDBObjectivesList.WasAnError || !newDBObjectivesList.Data) return { WasAnError: true, Code: newDBObjectivesList.Code?? Codes.InternalServerError, Message: newDBObjectivesList.Message?? 'Problem trying to get objectives list from database.'};
+      log.d('db - got new obj list');
 
       let newObjectives: Objective[] = newDBObjectivesList.Data;
       let newItems: Item[] = []
@@ -440,9 +447,10 @@ const db = {
         newItems.push(...rtnItemList.Data);
       }
 
-      log.d(newObjectives);
+      log.d('db - added new items to list');
       const rtnObjectiveList: ObjectiveList = {Objectives: newObjectives, Items: newItems}
 
+      log.d('db - returning');
       return { WasAnError:false, Code: Codes.OK, Data: rtnObjectiveList };
     } catch (err) {
       log.err('db.syncObjectivesList', 'err', err);

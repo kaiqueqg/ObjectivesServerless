@@ -371,12 +371,15 @@ export const syncObjectivesList = async (event: any): Promise<Response<Objective
     //!Unauthorized
     const respAuth = await validateToken(event, ['Basic', 'Admin', 'Guest']);
     if(respAuth.WasAnError || respAuth.Data === undefined || respAuth.Data === null)
-      return { WasAnError: true, Code: respAuth.Code?? Codes.Unauthorized, Message: respAuth.Message?? 'Unauthorized' };
+       return { WasAnError: true, Code: respAuth.Code?? Codes.Unauthorized, Message: respAuth.Message?? 'Unauthorized' };
+    
+    log.d('authorized');
 
     //!Parsing problem
     const objectivesList: ObjectiveList = JSON.parse(event.body);
     if(objectivesList === null || objectivesList === undefined) 
       return {WasAnError: true, Code: Codes.BadRequest, Message: 'There was an problem with the body of request.' }
+    log.d('parsed');
   
     //^Delete images in deleted Items
     if(objectivesList.DeleteItems) {
@@ -391,12 +394,15 @@ export const syncObjectivesList = async (event: any): Promise<Response<Objective
         }
       }
     }
+    log.d('images deleted');
 
     const respList = await db.syncObjectivesList(respAuth.Data.UserId, objectivesList);
+    log.d('sync db done');
   
     if(respList.WasAnError)
       return {...respList, Code: respList.Code?? Codes.InternalServerError, Message: 'There was an error trying to get objective item list.' };
 
+    log.d('returning');
     //*Happy path
     return {...respList, Code: respList.Code?? Codes.OK }
   } catch (err) {

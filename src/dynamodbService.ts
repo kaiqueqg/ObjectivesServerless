@@ -3,12 +3,12 @@ import { Codes, DeviceData, Item, Objective, ObjectiveList, Response, Services }
 
 const AWS = require('aws-sdk');
 const dynamoDB = new AWS.DynamoDB.DocumentClient();
-const objectivesTableName = 'Objectives';
-const itemsTableName = 'ObjectiveItems';
-const servicesTableName = 'Services';
+const objectivesTableName = process.env.DB_TABLE_OBJECTIVES;
+const itemsTableName = process.env.DB_TABLE_OBJECTIVE_ITEMS;
+const servicesTableName = process.env.DB_TABLE_SERVICES;
 
 //temp
-const deviceTableName = 'DeviceData';
+const deviceTableName = process.env.DB_TABLE_DEVICE;
 
 const db = {
   isEqual<T extends object>(item1: T, item2: T): boolean {
@@ -172,7 +172,7 @@ const db = {
           await dynamoDB.put(params).promise();
           resData.push(objectives[i]);
         }
-      } catch (err) {}
+      } catch (err) {log.err('putObjectives loop', 'err', err);}
       
       res = {
         WasAnError: false,
@@ -300,7 +300,7 @@ const db = {
           await dynamoDB.put(params).promise();
           resData.push(items[i]);
         }
-      } catch (err) {}
+      } catch (err) {log.err('putObjectives loop', 'err', err);}
       
       res = {
         WasAnError: false,

@@ -19,7 +19,7 @@ const validateToken = async (event: any, role: string[] = ['Basic', 'Admin', 'Gu
     if (authToken) { 
       const token: AuthenticationToken = { JwtToken: authToken.replace('Bearer ', '') };
       const params = {
-        FunctionName: process.env.AUTHENTICATE_FUNCTION_NAME,
+        FunctionName: process.env.BK_AUTHENTICATE_FUNCTION_NAME ||'',
         InvocationType: 'RequestResponse',
         Payload: JSON.stringify(token),
       };
@@ -57,7 +57,7 @@ export const isUpObjective = async (event: any) => {
 
 export const deleteS3Image = async (userId: string, itemId:string, fileName:string):Promise<boolean> => {
   try {
-    const bucketName = process.env.OBJECTIVE_IMAGE_BUCKET_NAME ||'';
+    const bucketName = process.env.BK_OBJECTIVE_IMAGE_BUCKET_NAME ||'';
     const key = `${userId}/${itemId}/${fileName}`;
 
     const params = { Bucket: bucketName, Key: key, };
@@ -424,7 +424,7 @@ export const backupData = async (event: any): Promise<Response<boolean>> => {
     //^Setup bucket
     const now = new Date().toISOString();
     const params = {
-      Bucket: process.env.OBJECTIVE_BACKUP_BUCKET_NAME || '',
+      Bucket: process.env.BK_OBJECTIVE_BACKUP_BUCKET_NAME || '',
       Key: `${respAuth.Data.UserId}/backup/${now}.json`,
       Body: JSON.stringify(respList.Data, null, 2),
       ContentType: "application/json"
@@ -456,7 +456,7 @@ export const getBackupDataList = async (event: any): Promise<Response<string>> =
       return { WasAnError: true, Code: respAuth.Code?? Codes.Unauthorized, Message: respAuth.Message?? 'Unauthorized' };
 
     const listResponse = await s3.listObjectsV2({
-      Bucket: process.env.OBJECTIVE_BACKUP_BUCKET_NAME || '',
+      Bucket: process.env.BK_OBJECTIVE_BACKUP_BUCKET_NAME || '',
       Prefix: `${respAuth.Data.UserId}/backup/`
     }).promise();
     
@@ -496,7 +496,7 @@ export const generateGetPresignedUrl = async (event: any): Promise<Response<Pres
     }
 
     // Generate pre-signed URL
-    const bucketName = process.env.OBJECTIVE_IMAGE_BUCKET_NAME ||'';
+    const bucketName = process.env.BK_OBJECTIVE_IMAGE_BUCKET_NAME ||'';
     const key = `uploads/${respAuth.Data.UserId}/${data.itemId}/${data.fileName}`;
     const params = {
       Bucket: bucketName,
@@ -545,7 +545,7 @@ export const generatePutPresignedUrl = async (event: any): Promise<Response<Pres
     }
 
     //! Generate pre-signed URL
-    const bucketName = process.env.OBJECTIVE_IMAGE_BUCKET_NAME ||'';
+    const bucketName = process.env.BK_OBJECTIVE_IMAGE_BUCKET_NAME ||'';
     const key = `uploads/${respAuth.Data.UserId}/${data.itemId}/${data.fileName}`;
     const params = {
       Bucket: bucketName,
@@ -595,7 +595,7 @@ export const generateDeletePresignedUrl = async (event: any): Promise<Response<P
     }
 
     //! Generate pre-signed URL
-    const bucketName = process.env.OBJECTIVE_IMAGE_BUCKET_NAME ||'';
+    const bucketName = process.env.BK_OBJECTIVE_IMAGE_BUCKET_NAME ||'';
     const key = `uploads/${respAuth.Data.UserId}/${data.itemId}/${data.fileName}`;
     const params = {
       Bucket: bucketName,

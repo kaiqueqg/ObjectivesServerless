@@ -19,7 +19,7 @@ const validateToken = async (event: any, role: string[] = ['Basic', 'Admin', 'Gu
     if (authToken) { 
       const token: AuthenticationToken = { JwtToken: authToken.replace('Bearer ', '') };
       const params = {
-        FunctionName: process.env.BK_AUTHENTICATE_FUNCTION_NAME ||'',
+        FunctionName: process.env.FC_AUTHENTICATE_FUNCTION_NAME ||'',
         InvocationType: 'RequestResponse',
         Payload: JSON.stringify(token),
       };

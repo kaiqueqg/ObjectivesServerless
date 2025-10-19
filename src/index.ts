@@ -2,55 +2,89 @@ import log from "./log";
 import AWS from 'aws-sdk';
 import db from "./dynamodbService";
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
-import { Codes, Response, DBUser, AuthenticationToken, Objective, Item, ObjectiveList, PresignedUrl, ImageInfo, Image, ItemType, DeviceData, Exercise, Medicine, Grocery, Divider, Question, Note, Wait, Step, StepImportance, Link, Location } from "./types";
+import {
+  // Core types
+  Codes,
+  Response,
+  AuthenticationRequest,
+  AuthenticationResponse,
+
+  // Database models
+  DBUser,
+  DBToken,
+  Service,
+  Objective,
+  Item,
+  ObjectiveList,
+  DeviceData,
+
+  // Media & Files
+  PresignedUrl,
+  ImageInfo,
+  Image,
+
+  // Domain entities
+  ItemType,
+  Exercise,
+  Medicine,
+  Grocery,
+  Divider,
+  Question,
+  Note,
+  Wait,
+  Step,
+  StepImportance,
+  Link,
+  Location,
+
+  // Default responses
+  Ok,
+  BadRequest,
+  Unauthorized,
+  Forbidden,
+  Conflict,
+  InternalServerError,
+  ServiceUnavailable,
+  PayloadTooLarge,
+} from "./types";
 
 const lambda = new AWS.Lambda();
 const s3 = new AWS.S3();
 
-//! Method responsable for calling authenticate lambda
-const validateToken = async (event: any, role: string[] = ['Basic', 'Admin', 'Guest']): Promise<Response<DBUser>> => { //todo change the return
-  try {
-    const respStatus = await db.getService();
-    if(respStatus.WasAnError || !respStatus.Data)
-      return { WasAnError: true, Code: respStatus.Code?? Codes.InternalServerError, Message: respStatus.Message?? 'There was an error trying to get the service status from database.'};
-    //Service is on?
-    if(!respStatus.Data.Up) return { WasAnError: true, Code: Codes.ServiceUnavailable, Message: 'Identity Service is turned off. ' + respStatus.Data.UpReason };
-    
-    const authToken = event.headers.Authorization || event.headers.authorization;
-    if (authToken) { 
-      const token: AuthenticationToken = { JwtToken: authToken.replace('Bearer ', '') };
-      const params = {
-        FunctionName: process.env.FC_AUTHENTICATE_FUNCTION_NAME ||'',
-        InvocationType: 'RequestResponse',
-        Payload: JSON.stringify(token),
-      };
 
-      const data = await lambda.invoke(params).promise();
-      const respDBUser: Response<DBUser> = JSON.parse(data.Payload as string) as Response<DBUser>;
-      if(respDBUser.WasAnError || respDBUser.Data === null || respDBUser.Data === undefined)
-        return { WasAnError: true, Message: respDBUser.Message??'There was an problem with authorization token.', Code:respDBUser.Code?? Codes.Unauthorized};
+// Method responsible for calling authenticate lambda
+const validateToken = async (event: APIGatewayProxyEvent, role: string[] = ["Basic"]): Promise<AuthenticationResponse|null> => {
+  log.d('validateToken - start - ', event)
+  
+  const authToken = event.headers.authorization;
+  log.d('validateToken - ', authToken)
 
-      if(!role.includes(respDBUser.Data.Role))
-        return { WasAnError: true, Message: `Your role can't access this.`, Code: Codes.Unauthorized };
-      return respDBUser;
-    }
-    else{
-      return {
-        WasAnError: true,
-        Message: 'There was an error getting authorization header.', 
-        Code: Codes.Unauthorized
-      };
-    }
-  } catch (err) {
-    log.err('validateToken', 'err', JSON.stringify(err, null ,2));
-    return {
-      WasAnError: true,
-      Message: 'There was an error validating the jwt token.',
-      Exception: JSON.stringify(err, null ,2), 
-      Code: Codes.Unauthorized
+  if (authToken) {
+    const token: AuthenticationRequest = {
+      JwtToken: authToken.replace("Bearer ", ""),
+      RoleRequired: role,
     };
+
+    log.d('validateToken - ', token)
+    const params = {
+      FunctionName: "AuthenticateFunction",
+      InvocationType: "RequestResponse",
+      Payload: JSON.stringify(token),
+    };
+
+    const data = await lambda.invoke(params).promise();
+    log.d('validateToken - ', data)
+    const payload = JSON.parse(data.Payload as string);
+    log.d('validateToken - ', payload)
+    const authUserResponse: AuthenticationResponse = typeof payload === "string" ? JSON.parse(payload) : payload;
+
+    log.d('validateToken - ', authUserResponse)
+
+    return authUserResponse;
   }
-}
+
+  return null;
+};
 
 const checkObjective = (o: Objective): Objective => {
   return(
@@ -74,7 +108,7 @@ const checkObjective = (o: Objective): Objective => {
   )
 }
 
-export const checkItem = (i: Item): Item => {
+const checkItem = (i: Item): Item => {
   const base: Item = {
     ItemId: String(i.ItemId ?? ''),
     UserIdObjectiveId: String(i.UserIdObjectiveId ?? ''),
@@ -213,392 +247,231 @@ export const deleteS3Image = async (userId: string, itemId:string, fileName:stri
   }
 };
 
-export const getObjectiveList = async (event: any): Promise<Response<Objective[]>> => {
+export const getObjectiveList = async (event: any): Promise<Response> => {
   try {
-    //!Unauthorized
-    const respAuth = await validateToken(event, ['Basic', 'Admin', 'Guest']);
-    if(respAuth.WasAnError || respAuth.Data === undefined || respAuth.Data === null) 
-      return { WasAnError: true, Code: respAuth.Code?? Codes.Unauthorized, Message: respAuth.Message?? 'Unauthorized'};
-    
-    //Database access
-    const respList = await db.getObjectiveList(respAuth.Data.UserId);
-    if(respList.WasAnError)
-      return {...respList, Code: respList.Code?? Codes.InternalServerError, Message: 'There was an error trying to get objective list.' };
+    log.d('getObjectiveList - ', event)
+    const service = await db.getService();
+    log.d('getObjectiveList - service - ', service)
+    if (!service || !service.Up) return ServiceUnavailable('Identity server unavailable: ' + service?.UpReason);
 
-    //*Happy path
-    return {...respList, Code: respList.Code?? Codes.OK };
+    const authUser = await validateToken(event, ['Basic', 'Admin', 'Guest']);
+    log.d('getObjectiveList - authUser - ', authUser)
+    if (!authUser || !authUser.User || !authUser.Authorized) return Unauthorized(authUser?.Message);
+
+    const objList = await db.getObjectiveList(authUser.User.UserId);
+    log.d('getObjectiveList - objList - ', objList)
+    if(!objList) return InternalServerError("There was an untreated error on getObjectiveList.");
+
+    log.d('getObjectiveList - ok')
+    return Ok('', objList);
   } catch (err) {
-    return { 
-      success: false, 
-      code: Codes.InternalServerError,
-      message: 'There was an untreated error on GetObjectiveList.', 
-      exception: JSON.stringify(err) 
-    };
+    return InternalServerError("There was an untreated error on getObjectiveList.");
   }
 }
-export const getObjectiveItemList = async (event: any): Promise<Response<Item[]>> => {
+export const getObjectiveItemList = async (event: any): Promise<Response> => {
   try {
-    // if(!event.body)
-    //   return {WasAnError: true, Code: Codes.BadRequest, Message: 'There was an problem with the body of request.' } 
+    log.d('getObjectiveItemList - ', event)
+    if(!event.body || typeof event.body !== 'string')return BadRequest('There was an problem with the body of request.');
+    if(event.body.length > 100_000) return PayloadTooLarge('Request body too large.');
 
-    // if(event.body.length > 100_000)
-    //   return {WasAnError: true, Code: Codes.PayloadTooLarge, Message: 'Request body too large.' } 
-
-    //!Parsing problem
     const objectiveId: {ObjectiveId: string} = JSON.parse(event.body);
     if(!objectiveId.ObjectiveId || objectiveId.ObjectiveId.trim() === '')
-      return { WasAnError: true, Code: Codes.BadRequest, Message: 'There was an problem with the body of request.'};
+      return BadRequest('There was an problem with the body of request.');
 
-    //!Unauthorized
-    const respAuth = await validateToken(event, ['Basic', 'Admin', 'Guest']);
-    if(respAuth.WasAnError || respAuth.Data === undefined || respAuth.Data === null)
-      return { WasAnError: true, Code: respAuth.Code?? Codes.Unauthorized, Message: respAuth.Message?? 'Unauthorized'};
+    const authUser = await validateToken(event, ['Basic', 'Admin', 'Guest']);
+    log.d('getObjectiveItemList - authUser - ', authUser)
+    if (!authUser || !authUser.User || !authUser.Authorized) return Unauthorized(authUser?.Message);
 
-    //Database access
-    const respList = await db.getObjectiveItemList(respAuth.Data.UserId + objectiveId.ObjectiveId);
-    if(respList.WasAnError)
-      return {...respList, Code: respList.Code?? Codes.InternalServerError, Message: 'There was an error trying to get objective item list.' };
-
-    //*Happy path
-    return {...respList, Code: respList.Code?? Codes.OK }
+    const objItemList = await db.getObjectiveItemList(authUser.User.UserId + objectiveId.ObjectiveId);
+    log.d('getObjectiveItemList - objItemList - ', objItemList)
+    if(!objItemList) return InternalServerError("There was an untreated error on getObjectiveItemList.");
+    
+    log.d('getObjectiveItemList - ok')
+    return Ok('', objItemList);
   } catch (err) {
     log.err('getObjectiveItemList', 'err', err);
-    return { 
-      WasAnError: true, 
-      Code: Codes.InternalServerError, 
-      Message: 'There was an untreated error on GetObjectiveItemList.', 
-      Exception: JSON.stringify(err),
-    };
+    return InternalServerError("There was an untreated error on getObjectiveItemList.");
   }
 }
-export const getObjective = async (event: any): Promise<Response<Objective>> => {
+export const getObjective = async (event: any): Promise<Response> => {
   try {
-    // if(!event.body)
-    //   return {WasAnError: true, Code: Codes.BadRequest, Message: 'There was an problem with the body of request.' } 
+    log.d('getObjective - ', event)
+    if(!event.body || typeof event.body !== 'string') return BadRequest('There was an problem with the body of request.');
+    if(event.body.length > 100_000) return PayloadTooLarge('Request body too large.');
 
-    // if(event.body.length > 100_000)
-    //   return {WasAnError: true, Code: Codes.PayloadTooLarge, Message: 'Request body too large.' } 
-
-    //!Parsing problem
     const body: {ObjectiveId: string} = JSON.parse(event.body);
-    if(body.ObjectiveId === null || body.ObjectiveId === undefined) 
-      return {WasAnError: true, Code: Codes.BadRequest, Message: 'There was an problem with the body of request.' }
+    if(!body.ObjectiveId || body.ObjectiveId.trim() === '') return BadRequest('There was an problem with the body of request.');
 
-    //!Unauthorized
-    const respAuth = await validateToken(event, ['Basic', 'Admin', 'Guest']);
-    if(respAuth.WasAnError || respAuth.Data === undefined || respAuth.Data === null) 
-      return { WasAnError: true, Code: respAuth.Code?? Codes.Unauthorized, Message: respAuth.Message?? 'Unauthorized'};
+    const authUser = await validateToken(event, ['Basic', 'Admin', 'Guest']);
+    log.d('getObjective - authUser - ', authUser)
+    if (!authUser || !authUser.User || !authUser.Authorized) return Unauthorized(authUser?.Message);
     
-    //Database access
-    const responseObjective = await db.getObjective(respAuth.Data.UserId, body.ObjectiveId);
-    if(responseObjective.WasAnError)
-      return {...responseObjective, Code: responseObjective.Code?? Codes.InternalServerError, Message: 'There was an error trying to get the objective.' };
-  
-    //*Happy path
-    return {...responseObjective, Code: responseObjective.Code?? Codes.OK };
+    const objective = await db.getObjective(authUser.User.UserId, body.ObjectiveId);
+    log.d('getObjective - objective - ', objective)
+    if(!objective) return InternalServerError("There was an untreated error on getObjective.");
+
+    log.d('getObjective - ok')
+    return Ok('', objective);
   } catch (err) {
     log.err('getObjective', 'err', err);
-    return { 
-      WasAnError: true, 
-      Code: Codes.InternalServerError, 
-      Message: 'There was an untreated error on GetObjective.', 
-      Exception: JSON.stringify(err) 
-    };
+    return InternalServerError("There was an untreated error on getObjective.");
   }
 }
-export const putObjective = async (event: any): Promise<Response<Objective>> => {
+export const putObjectives = async (event: any): Promise<Response> => {
   try {
-    // if(!event.body)
-    //   return {WasAnError: true, Code: Codes.BadRequest, Message: 'There was an problem with the body of request.' } 
-
-    // if(event.body.length > 100_000)
-    //   return {WasAnError: true, Code: Codes.PayloadTooLarge, Message: 'Request body too large.' } 
-
-    //!Parsing problem
-    const rawObj: Objective = JSON.parse(event.body);
-    if(rawObj === null || rawObj === undefined) 
-      return {WasAnError: true, Code: Codes.BadRequest, Message: 'There was an problem with the body of request.' }
-
-    //!Unauthorized
-    const respAuth = await validateToken(event, ['Basic', 'Admin', 'Guest']);
-    if(respAuth.WasAnError || respAuth.Data === undefined || respAuth.Data === null) 
-      return { WasAnError: true, Code: respAuth.Code?? Codes.Unauthorized, Message: respAuth.Message?? 'Unauthorized'};
-
-    //!Manual clean of extra fields, I may change later
-    const obj: Objective = checkObjective(rawObj);
-
-    //Database access
-    obj.UserId = respAuth.Data.UserId;
-    const responseObjective = await db.putObjective(respAuth.Data.UserId, obj);
-    if(responseObjective.WasAnError)
-      return {...responseObjective, Code: responseObjective.Code?? Codes.InternalServerError, Message: 'There was an error trying to put the objective.' };
-  
-    //*Happy path
-    return {...responseObjective, Code: responseObjective.Code?? Codes.OK };
-  } catch (err) {
-    log.err('putObjective', 'err', err);
-    return { 
-      WasAnError: true, 
-      Code: Codes.InternalServerError, 
-      Message: 'There was an untreated error on PutObjective.', 
-      Exception: JSON.stringify(err) 
-    };
-  }
-}
-export const putObjectives = async (event: any): Promise<Response<Objective[]>> => {
-  try {
-    // if(!event.body)
-    //   return {WasAnError: true, Code: Codes.BadRequest, Message: 'There was an problem with the body of request.' } 
-
-    // if(event.body.length > 100_000)
-    //   return {WasAnError: true, Code: Codes.PayloadTooLarge, Message: 'Request body too large.' } 
+    log.d('putObjectives - ', event)
+    if(!event.body || typeof event.body !== 'string' || typeof event.body !== 'string') return BadRequest('There was an problem with the body of request.');
+    if(event.body.length > 100_000) return PayloadTooLarge('Request body too large.'); 
     
-    const rawObjs: Objective[] = JSON.parse(event.body);
+    const rawObj: Objective[] = JSON.parse(event.body);
+    if(!rawObj) return BadRequest('There was an problem with the body of request.');
 
-    //!Parsing problem
-    if(rawObjs === null || rawObjs === undefined) 
-      return {WasAnError: true, Code: Codes.BadRequest, Message: 'There was an problem with the body of request.' }
+    const authUser = await validateToken(event, ['Basic', 'Admin', 'Guest']);
+    log.d('putObjectives - authUser - ', authUser)
+    if (!authUser || !authUser.User || !authUser.Authorized) return Unauthorized(authUser?.Message);
 
-    //!Max array size
-    if(rawObjs.length > 10)
-      return {WasAnError: true, Code: Codes.BadRequest, Message: 'Too many items.' }
+    let checkedObjs:Objective[] = []
+    for (let i = 0; i < rawObj.length; i++) {
+      let o = rawObj[i];
+      checkedObjs.push(checkObjective(o))
+    }
+    log.d('putObjectives - checkedObjs - ', checkedObjs)
 
-    //!Manual clean of extra fields, I may change later
-    const objs: Objective[] = rawObjs.map((o: any) => (checkObjective(o)));
+    const obj = await db.putObjectives(authUser.User.UserId, checkedObjs);
+    log.d('putObjectives - obj - ', obj)
+    if(!obj) return InternalServerError('There was an untreated error on putObjectives.');
 
-    //!Unauthorized
-    const respAuth = await validateToken(event, ['Basic', 'Admin', 'Guest']);
-    if(respAuth.WasAnError || respAuth.Data === undefined || respAuth.Data === null) 
-      return { WasAnError: true, Code: respAuth.Code?? Codes.Unauthorized, Message: respAuth.Message?? 'Unauthorized'};
-
-    //Database access
-    const responseObjectives = await db.putObjectives(respAuth.Data.UserId, objs);
-    if(responseObjectives.WasAnError)
-      return {...responseObjectives, Code: responseObjectives.Code?? Codes.InternalServerError, Message: 'There was an error trying to put the objective.' };
-  
-    //*Happy path
-    return {...responseObjectives, Code: responseObjectives.Code?? Codes.OK };
+    log.d('putObjectives - ok')
+    return Ok('', checkedObjs);
   } catch (err) {
     log.err('putObjectives', 'err', err);
-    return { 
-      WasAnError: true, 
-      Code: Codes.InternalServerError, 
-      Message: 'There was an untreated error on PutObjectives.', 
-      Exception: JSON.stringify(err) 
-    };
+    return InternalServerError('There was an untreated error on putObjectives.');
   }
 }
-export const deleteObjective = async (event: any): Promise<Response<boolean>> => {
+export const deleteObjectives = async (event: any): Promise<Response> => {
   try {
-    // if(!event.body)
-    //   return {WasAnError: true, Code: Codes.BadRequest, Message: 'There was an problem with the body of request.' } 
-
-    // if(event.body.length > 100_000)
-    //   return {WasAnError: true, Code: Codes.PayloadTooLarge, Message: 'Request body too large.' } 
+    log.d('deleteObjectives - ', event)
+    if(!event.body || typeof event.body !== 'string') return BadRequest('There was an problem with the body of request.');
+    if(event.body.length > 100_000) return PayloadTooLarge('Request body too large.'); 
     
-    //!Parsing problem
-    const objective: Objective = JSON.parse(event.body);
-    if(!objective) 
-      return {WasAnError: true, Code: Codes.BadRequest, Message: 'There was an problem with the body of request.' }
+    const rawObj: Objective[] = JSON.parse(event.body);
+    log.d('deleteObjectives - rawObj - ', rawObj)
+    if(!rawObj) return BadRequest('There was an problem with the body of request.');
 
-    //!Unauthorized
-    const respAuth = await validateToken(event, ['Basic', 'Admin', 'Guest']);
-    if(respAuth.WasAnError || !respAuth.Data) 
-      return { WasAnError: true, Code: respAuth.Code?? Codes.Unauthorized, Message: respAuth.Message?? 'Unauthorized'};
-    
-    //Database access
-    const responseObjective = await db.deleteObjective(respAuth.Data.UserId, objective);
-    if(responseObjective.WasAnError)
-      return {...responseObjective, Data: false, Code: responseObjective.Code?? Codes.InternalServerError, Message: 'There was an error trying to delete the objective.' };
-  
-    //*Happy path
-    return {...responseObjective, Data: true, Code: responseObjective.Code?? Codes.OK };
+    const authUser = await validateToken(event, ['Basic', 'Admin', 'Guest']);
+    log.d('deleteObjectives - authUser - ', authUser)
+    if (!authUser || !authUser.User || !authUser.Authorized) return Unauthorized(authUser?.Message);
+
+    const obj = await db.deleteObjectives(authUser.User.UserId, rawObj);
+    log.d('deleteObjectives - obj - ', obj)
+    if(!obj) return InternalServerError('There was an untreated error on deleteObjective.');
+
+    log.d('deleteObjectives - ok')
+    return Ok('', obj);
   } catch (err) {
     log.err('deleteObjective', 'err', err);
-    return { 
-      WasAnError: true, 
-      Code: Codes.InternalServerError, 
-      Message: 'There was an untreated error on DeleteObjective.', 
-      Exception: JSON.stringify(err) 
-    };
+    return InternalServerError('There was an untreated error on deleteObjective.');
   }
 }
 
-export const getObjectiveItem = async (event: any): Promise<Response<Item>> => {
+export const getObjectiveItem = async (event: any): Promise<Response> => {
   try {
-    // if(!event.body)
-    //   return {WasAnError: true, Code: Codes.BadRequest, Message: 'There was an problem with the body of request.' } 
-
-    // if(event.body.length > 100_000)
-    //   return {WasAnError: true, Code: Codes.PayloadTooLarge, Message: 'Request body too large.' } 
+    log.d('getObjectiveItem - ', event)
+    if(!event.body || typeof event.body !== 'string')return BadRequest('There was an problem with the body of request.');
+    if(event.body.length > 100_000) return PayloadTooLarge('Request body too large.'); 
     
-    //!Parsing problem
-    const item: {UserIdObjectiveId: string, ItemId: string} = JSON.parse(event.body);
-    if(item.UserIdObjectiveId === null || item.UserIdObjectiveId === undefined) 
-      return {WasAnError: true, Code: Codes.BadRequest, Message: 'There was an problem with the body of request.' }
+    const rawItem: {UserIdObjectiveId: string, ItemId: string} = JSON.parse(event.body);
+    log.d('getObjectiveItem - rawItem - ', event)
+    if(!rawItem) return BadRequest('There was an problem with the body of request.');
 
-    //!Unauthorized
-    const respAuth = await validateToken(event, ['Basic', 'Admin', 'Guest']);
-    if(respAuth.WasAnError || respAuth.Data === undefined || respAuth.Data === null) 
-      return { WasAnError: true, Code: respAuth.Code?? Codes.Unauthorized, Message: respAuth.Message?? 'Unauthorized'};
-    
-    //Database access
-    item.UserIdObjectiveId = respAuth.Data.UserId + ((item.UserIdObjectiveId.length > 40) ? item.UserIdObjectiveId.slice(-40) : item.UserIdObjectiveId);
-    const respItem = await db.getObjectiveItem(respAuth.Data.UserId + item.UserIdObjectiveId, item.ItemId);
-    if(respItem.WasAnError)
-      return {...respItem, Code: respItem.Code?? Codes.InternalServerError, Message: 'There was an error trying to get the item.' };
-  
-    //*Happy path
-    return {...respItem, Code: respItem.Code?? Codes.OK };
+    const authUser = await validateToken(event, ['Basic', 'Admin', 'Guest']);
+    log.d('getObjectiveItem - authUser - ', event)
+    if (!authUser || !authUser.User || !authUser.Authorized) return Unauthorized(authUser?.Message);
+
+    rawItem.UserIdObjectiveId = authUser.User.UserId + ((rawItem.UserIdObjectiveId.length > 40) ? rawItem.UserIdObjectiveId.slice(-40) : rawItem.UserIdObjectiveId);
+    const item = await db.getObjectiveItem(authUser.User.UserId + rawItem.UserIdObjectiveId, rawItem.ItemId);
+    log.d('getObjectiveItem - item - ', item)
+    if(!item) return InternalServerError('There was an untreated error on getObjectiveItem.');
+
+    log.d('getObjectiveItem - ok')
+    return Ok('', item);
   } catch (err) {
     log.err('getObjectiveItem', 'err', err);
-    return { 
-      WasAnError: true, 
-      Code: Codes.InternalServerError, 
-      Message: 'There was an untreated error on GetObjectiveItem.', 
-      Exception: JSON.stringify(err) 
-    };
+    return InternalServerError('There was an untreated error on getObjectiveItem.');
   }
 }
-export const putObjectiveItem = async (event: any): Promise<Response<Item>> => {
+export const putObjectiveItems = async (event: any): Promise<Response> => {
   try {
-    // if(!event.body)
-    // return {WasAnError: true, Code: Codes.BadRequest, Message: 'There was an problem with the body of request.' } 
+    log.d('putObjectiveItems - ', event)
+    if(!event.body || typeof event.body !== 'string')return BadRequest('There was an problem with the body of request.');
+    if(event.body.length > 100_000) return PayloadTooLarge('Request body too large.'); 
 
-    // if(event.body.length > 100_000)
-    //   return {WasAnError: true, Code: Codes.PayloadTooLarge, Message: 'Request body too large.' } 
+    const rawItems: Item[] = JSON.parse(event.body);
+    log.d('putObjectiveItems - rawItems - ', rawItems)
+    if(!rawItems) return BadRequest('There was an problem with the body of request.');
 
-    //!Parsing problem
-    const rawItem: Item = JSON.parse(event.body);
-    if(!rawItem) 
-      return {WasAnError: true, Code: Codes.BadRequest, Message: 'There was an problem with the body of request.' }
-
-    //!Unauthorized
-    const respAuth = await validateToken(event, ['Basic', 'Admin', 'Guest']);
-    if(respAuth.WasAnError || respAuth.Data === undefined || respAuth.Data === null) 
-      return { WasAnError: true, Code: respAuth.Code?? Codes.Unauthorized, Message: respAuth.Message?? 'Unauthorized'};
+    const authUser = await validateToken(event, ['Basic', 'Admin', 'Guest']);
+    log.d('putObjectiveItems - authUser - ', authUser)
+    if (!authUser || !authUser.User || !authUser.Authorized) return Unauthorized(authUser?.Message);
     
-    //!Manual clean of extra fields, I may change later
-    const item: Item = checkItem(rawItem);
+    let checkedItems:Item[] = []
+    for (let i = 0; i < rawItems.length; i++) {
+      let e = rawItems[i];
+      checkedItems.push(checkItem(e))
+    }
+    log.d('putObjectiveItems - checkedItems - ', checkedItems)
 
-    //Database access
-    const respItem = await db.putObjectiveItem(respAuth.Data.UserId, item);
-    if(respItem.WasAnError)
-      return {...respItem, Code: respItem.Code?? Codes.InternalServerError, Message: 'There was an error trying to put the item.' };
-  
-    //*Happy path
-    return {...respItem, Code: respItem.Code?? Codes.OK };
-  } catch (err) {
-    log.err('putObjectiveItem', 'err', err);
-    return { 
-      WasAnError: true, 
-      Code: Codes.InternalServerError, 
-      Message: 'There was an untreated error on PutObjectiveItem.', 
-      Exception: JSON.stringify(err) 
-    };
-  }
-}
-export const putObjectiveItems = async (event: any): Promise<Response<Item[]>> => {
-  try {
-    // if(!event.body)
-    //   return {WasAnError: true, Code: Codes.BadRequest, Message: 'There was an problem with the body of request.' } 
+    const item = await db.putObjectiveItems(authUser.User.UserId, checkedItems);
+    log.d('putObjectiveItems - item - ', item)
+    if(!item) return InternalServerError('There was an untreated error on putObjectiveItem.');
 
-    // if(event.body.length > 100_000)
-    //   return {WasAnError: true, Code: Codes.PayloadTooLarge, Message: 'Request body too large.' } 
-    
-    //!Parsing problem
-    const rawitems: Item[] = JSON.parse(event.body);
-    if(!rawitems) 
-      return {WasAnError: true, Code: Codes.BadRequest, Message: 'There was an problem with the body of request.' }
-
-    //!Max array size
-    if(rawitems.length > 10)
-      return {WasAnError: true, Code: Codes.BadRequest, Message: 'Too many items.' }
-    
-    //!Manual clean of extra fields, I may change later
-    const items: Item[] = rawitems.map((i: Item) => (checkItem(i)));
-
-    //!Unauthorized
-    const respAuth = await validateToken(event, ['Basic', 'Admin', 'Guest']);
-    if(respAuth.WasAnError || respAuth.Data === undefined || respAuth.Data === null) 
-      return { WasAnError: true, Code: respAuth.Code?? Codes.Unauthorized, Message: respAuth.Message?? 'Unauthorized'};
-    
-    //Database access
-    const respItem = await db.putObjectiveItems(respAuth.Data.UserId, items);
-    if(respItem.WasAnError)
-      return {...respItem, Code: respItem.Code?? Codes.InternalServerError, Message: 'There was an error trying to put the items.' };
-  
-    //*Happy path
-    return {...respItem, Code: respItem.Code?? Codes.OK };
+    log.d('putObjectiveItems - ok')
+    return Ok('', checkedItems);
   } catch (err) {
     log.err('putObjectiveItems', 'err', err);
-    return { 
-      WasAnError: true, 
-      Code: Codes.InternalServerError, 
-      Message: 'There was an untreated error on PutObjectiveItems.', 
-      Exception: JSON.stringify(err) 
-    };
+    return InternalServerError('There was an untreated error on putObjectiveItem.');
   }
 }
 export const deleteObjectiveItem = async (event: any) => {
   try {
-    // if(!event.body)
-    //   return {WasAnError: true, Code: Codes.BadRequest, Message: 'There was an problem with the body of request.' } 
+    log.d('deleteObjectiveItem - ', event)
+    if(!event.body || typeof event.body !== 'string')return BadRequest('There was an problem with the body of request.');
+    if(event.body.length > 100_000) return PayloadTooLarge('Request body too large.'); 
 
-    // if(event.body.length > 100_000)
-    //   return {WasAnError: true, Code: Codes.PayloadTooLarge, Message: 'Request body too large.' } 
+    const rawItem: Item = JSON.parse(event.body);
+    log.d('deleteObjectiveItem - rawItem - ', rawItem)
+    if(!rawItem) return BadRequest('There was an problem with the body of request.');
+
+    const authUser = await validateToken(event, ['Basic', 'Admin', 'Guest']);
+    log.d('deleteObjectiveItem - authUser - ', authUser)
+    if (!authUser || !authUser.User || !authUser.Authorized) return Unauthorized(authUser?.Message);
     
-    //!Parsing problem
-    const item: Item = JSON.parse(event.body);
-    if(!item) 
-      return {WasAnError: true, Code: Codes.BadRequest, Message: 'There was an problem with the body of request.' }
+    const item = await db.deleteObjectiveItems(authUser.User.UserId, [rawItem]);
+    log.d('deleteObjectiveItem - item - ', item)
+    if(!item) return InternalServerError('There was an untreated error on deleteObjectiveItem.');
 
-    //!Unauthorized
-    const respAuth = await validateToken(event, ['Basic', 'Admin', 'Guest']);
-    if(respAuth.WasAnError || !respAuth.Data) 
-      return { WasAnError: true, Code: respAuth.Code?? Codes.Unauthorized, Message: respAuth.Message?? 'Unauthorized'};
-    
-    //^Delete image in deleted Item
-    if(item.Type === ItemType.Image){
-      const deleteImage = item as Image;
-      if(deleteImage.Name) await deleteS3Image(respAuth.Data.UserId, deleteImage.ItemId, deleteImage.Name);
-    }
-
-    //Database access
-    const respItem = await db.deleteObjectiveItem(respAuth.Data.UserId, item);
-    if(respItem.WasAnError)
-      return {...respItem, Data: false, Code: respItem.Code?? Codes.InternalServerError, Message: 'There was an error trying to delete the item.' };
-  
-    //*Happy path
-    return {...respItem, Data: true, Code: respItem.Code?? Codes.OK };
+    log.d('deleteObjectiveItem - ok')
+    return Ok();
   } catch (err) {
     log.err('deleteObjectiveItem', 'err', err);
-    return { 
-      WasAnError: true, 
-      Code: Codes.InternalServerError, 
-      Message: 'There was an untreated error on DeleteObjectiveItem.', 
-      Exception: JSON.stringify(err) 
-    };
+    return InternalServerError('There was an untreated error on deleteObjectiveItem.');
   }
 }
-export const syncObjectivesList = async (event: any): Promise<Response<ObjectiveList>> => {
+export const syncObjectivesList = async (event: any): Promise<Response> => {
   try {
-    // if(!event.body)
-    //   return {WasAnError: true, Code: Codes.BadRequest, Message: 'There was an problem with the body of request.' } 
-
-    // if(event.body.length > 100_000)
-    //   return {WasAnError: true, Code: Codes.PayloadTooLarge, Message: 'Request body too large.' } 
+    log.d('syncObjectivesList')
+    if(!event.body || typeof event.body !== 'string')return BadRequest('There was an problem with the body of request.');
+    if(event.body.length > 100_000) return PayloadTooLarge('Request body too large.'); 
+    log.d('syncObjectivesList 1')
     
-    //!Unauthorized
-    const respAuth = await validateToken(event, ['Basic', 'Admin', 'Guest']);
-    if(respAuth.WasAnError || respAuth.Data === undefined || respAuth.Data === null)
-       return { WasAnError: true, Code: respAuth.Code?? Codes.Unauthorized, Message: respAuth.Message?? 'Unauthorized' };
-
-    //!Parsing problem
     const objectivesList: ObjectiveList = JSON.parse(event.body);
-    if(objectivesList === null || objectivesList === undefined) 
-      return {WasAnError: true, Code: Codes.BadRequest, Message: 'There was an problem with the body of request.' }
-  
+    if(!objectivesList) return BadRequest('There was an problem with the body of request.');
+    log.d('syncObjectivesList 2')
+    
+    const authUser = await validateToken(event, ['Basic', 'Admin', 'Guest']);
+    log.d('syncObjectivesList 3 - ', authUser)
+    if (!authUser || !authUser.User || !authUser.Authorized) return Unauthorized(authUser?.Message);
+
     //^Delete images in deleted Items
     if(objectivesList.DeleteItems) {
       const deletedItems = objectivesList.DeleteItems;
@@ -612,119 +485,79 @@ export const syncObjectivesList = async (event: any): Promise<Response<Objective
         }
       }
     }
+    log.d('syncObjectivesList 4')
 
-    const respList = await db.syncObjectivesList(respAuth.Data.UserId, objectivesList);
-  
-    if(respList.WasAnError)
-      return {...respList, Code: respList.Code?? Codes.InternalServerError, Message: 'There was an error trying to get objective item list.' };
+    const syncList = await db.syncObjectivesList(authUser.User.UserId, objectivesList);
 
-    //*Happy path
-    return {...respList, Code: respList.Code?? Codes.OK }
+    log.d('syncObjectivesList 5')
+    if(!syncList) return InternalServerError('There was an untreated error on syncGroceryList.');
+    log.d('syncObjectivesList 6')
+
+    return Ok('', syncList);
   } catch (err) {
     log.err('syncGroceryList', 'err', err);
-    return { 
-      WasAnError: true, 
-      Code: Codes.InternalServerError,
-      Message: 'There was an untreated error on Sync Objective List.', 
-      Exception: JSON.stringify(err) 
-    };
+    return InternalServerError('There was an untreated error on syncGroceryList.');
   }
 }
 
-export const backupData = async (event: any): Promise<Response<boolean>> => {
+export const backupData = async (event: any): Promise<Response> => {
   try {
-    //!Unauthorized
-    const respAuth = await validateToken(event, ['Basic', 'Admin', 'Guest']);
-    if(respAuth.WasAnError || respAuth.Data === undefined || respAuth.Data === null)
-      return { WasAnError: true, Code: respAuth.Code?? Codes.Unauthorized, Message: respAuth.Message?? 'Unauthorized' };
+    const authUser = await validateToken(event, ['Basic', 'Admin', 'Guest']);
+    if (!authUser || !authUser.User || !authUser.Authorized) return Unauthorized(authUser?.Message);
 
-    //^Get data to backup
     const empty: ObjectiveList = {DeleteItems: [], DeleteObjectives: [], Items: [], Objectives:[]};
-    const respList = await db.syncObjectivesList(respAuth.Data.UserId, empty);
+    const syncList = await db.syncObjectivesList(authUser.User.UserId, empty);
 
-    //^Setup bucket
     const now = new Date().toISOString();
     const params = {
       Bucket: process.env.BK_OBJECTIVE_BACKUP_BUCKET_NAME || '',
-      Key: `${respAuth.Data.UserId}/backup/${now}.json`,
-      Body: JSON.stringify(respList.Data, null, 2),
+      Key: `${authUser.User.UserId}/backup/${now}.json`,
+      Body: JSON.stringify(syncList, null, 2),
       ContentType: "application/json"
     };
 
     await s3.putObject(params).promise();
-    return { 
-      WasAnError: false, 
-      Code: Codes.OK,
-      Message: 'OK',
-      Data: true,
-    };
+    return Ok();
   } catch (err) {
     log.err('backupData', 'err', err);
-    return { 
-      WasAnError: true, 
-      Code: Codes.InternalServerError,
-      Message: 'There was an untreated error on Sync Objective List.', 
-      Exception: JSON.stringify(err) 
-    };
+    return InternalServerError('There was an untreated error on backupData.');
   }
 }
 
-export const getBackupDataList = async (event: any): Promise<Response<string>> => {
+export const getBackupDataList = async (event: any): Promise<Response> => {
   try {
-    //!Unauthorized
-    const respAuth = await validateToken(event, ['Basic', 'Admin', 'Guest']);
-    if(respAuth.WasAnError || respAuth.Data === undefined || respAuth.Data === null)
-      return { WasAnError: true, Code: respAuth.Code?? Codes.Unauthorized, Message: respAuth.Message?? 'Unauthorized' };
+    const authUser = await validateToken(event, ['Basic', 'Admin', 'Guest']);
+    if (!authUser || !authUser.User || !authUser.Authorized) return Unauthorized(authUser?.Message);
 
     const listResponse = await s3.listObjectsV2({
       Bucket: process.env.BK_OBJECTIVE_BACKUP_BUCKET_NAME || '',
-      Prefix: `${respAuth.Data.UserId}/backup/`
+      Prefix: `${authUser.User.UserId}/backup/`
     }).promise();
     
-    // Extract only file names
     const fileNames: string[] = (listResponse.Contents ?? [])
       .map(obj => obj.Key?.split("/").pop() ?? "")
       .filter(name => name.length > 0); // Remove empty values (if any)
 
-    return {
-      WasAnError: false,
-      Code: Codes.OK,
-      Message: "OK",
-      Data: JSON.stringify(fileNames), // Returns only file names
-    };
+    return Ok(JSON.stringify(fileNames));
   } catch (err) {
     log.err('getBackupDataList', 'err', err);
-    return { 
-      WasAnError: true, 
-      Code: Codes.InternalServerError,
-      Message: 'There was an untreated error on get backup data.', 
-      Exception: JSON.stringify(err) 
-    };
+    return InternalServerError('There was an untreated error on getBackupDataList.');
   }
 }
 
-export const generateGetPresignedUrl = async (event: any): Promise<Response<PresignedUrl>> => {
+export const generateGetPresignedUrl = async (event: any): Promise<Response> => {
   try {
-    if(!event.body)
-      return {WasAnError: true, Code: Codes.BadRequest, Message: 'There was an problem with the body of request.' } 
+    if(!event.body || typeof event.body !== 'string')return BadRequest('There was an problem with the body of request.');
+    if(event.body.length > 100_000) return PayloadTooLarge('Request body too large.'); 
 
-    if(event.body.length > 100_000)
-      return {WasAnError: true, Code: Codes.PayloadTooLarge, Message: 'Request body too large.' } 
-    
-    //! Parse request body
     const data: ImageInfo = JSON.parse(event.body);
-    if(!data.fileName || !data.itemId) {
-      return { WasAnError: true, Code: Codes.BadRequest, Message: 'Invalid request body.', };
-    }
+    if(!data) return BadRequest('There was an problem with the body of request.');
 
-    //! Unauthorized
-    const respAuth = await validateToken(event, ['Basic', 'Admin', 'Guest']);
-    if (respAuth.WasAnError || !respAuth.Data)
-      return { WasAnError: true, Code: respAuth.Code ?? Codes.Unauthorized, Message: respAuth.Message ?? 'Unauthorized', };
+    const authUser = await validateToken(event, ['Basic', 'Admin', 'Guest']);
+    if (!authUser || !authUser.User || !authUser.Authorized) return Unauthorized(authUser?.Message);
 
-    // Generate pre-signed URL
     const bucketName = process.env.BK_OBJECTIVE_IMAGE_BUCKET_NAME ||'';
-    const key = `uploads/${respAuth.Data.UserId}/${data.itemId}/${data.fileName}`;
+    const key = `uploads/${authUser.User.UserId}/${data.itemId}/${data.fileName}`;
     const params = {
       Bucket: bucketName,
       Key: key,
@@ -733,54 +566,27 @@ export const generateGetPresignedUrl = async (event: any): Promise<Response<Pres
 
     const downloadUrl = await s3.getSignedUrlPromise('getObject', params);
 
-    //*Happy path
-    return {
-      WasAnError: false,
-      Code: Codes.OK,
-      Message: 'Pre-signed URL generated successfully.',
-      Data: { url: downloadUrl },
-    };
+    return Ok('', { url: downloadUrl });
   } catch (err) {
     log.err('generateGetPresignedUrl', 'err', err);
-    return {
-      WasAnError: true,
-      Code: Codes.InternalServerError,
-      Message: 'An error occurred while generating the pre-signed URL.',
-    };
+    return InternalServerError('There was an untreated error on generateGetPresignedUrl.');
   }
 };
 
-export const generatePutPresignedUrl = async (event: any): Promise<Response<PresignedUrl>> => {
+export const generatePutPresignedUrl = async (event: any): Promise<Response> => {
   try {
-    // if(!event.body)
-    //   return {WasAnError: true, Code: Codes.BadRequest, Message: 'There was an problem with the body of request.' } 
+    if(!event.body || typeof event.body !== 'string')return BadRequest('There was an problem with the body of request.');
+    if(event.body.length > 100_000) return PayloadTooLarge('Request body too large.'); 
 
-    // if(event.body.length > 100_000)
-    //   return {WasAnError: true, Code: Codes.PayloadTooLarge, Message: 'Request body too large.' } 
-    
-    //! Parse request body
     const data: ImageInfo = JSON.parse(event.body);
-    if(!data.fileName || !data.itemId || !data.fileType) {
-      return {
-        WasAnError: true,
-        Code: Codes.BadRequest,
-        Message: 'Invalid request body.',
-      };
-    }
+    if(!data) return BadRequest('There was an problem with the body of request.');
 
-    //! Unauthorized
-    const respAuth = await validateToken(event, ['Basic', 'Admin', 'Guest']);
-    if (respAuth.WasAnError || !respAuth.Data)
-      return {
-        WasAnError: true,
-        Code: respAuth.Code ?? Codes.Unauthorized,
-        Message: respAuth.Message ?? 'Unauthorized',
-      };
+    const authUser = await validateToken(event, ['Basic', 'Admin', 'Guest']);
+    if (!authUser || !authUser.User || !authUser.Authorized) return Unauthorized(authUser?.Message);
 
-    //! Generate pre-signed URL
     const bucketName = process.env.BK_OBJECTIVE_IMAGE_BUCKET_NAME ||'';
     const contentType = data.fileType || 'application/octet-stream';
-    const key = `uploads/${respAuth.Data.UserId}/${data.itemId}/${data.fileName}`;
+    const key = `uploads/${authUser.User.UserId}/${data.itemId}/${data.fileName}`;
     const params = {
       Bucket: bucketName,
       Key: key,
@@ -791,53 +597,26 @@ export const generatePutPresignedUrl = async (event: any): Promise<Response<Pres
     const uploadUrl = await s3.getSignedUrlPromise('putObject', params);
 
     //* Happy path
-    return {
-      WasAnError: false,
-      Code: Codes.OK,
-      Message: 'Pre-signed URL generated successfully.',
-      Data: { url: uploadUrl },
-    };
+    return Ok('', { url: uploadUrl });
   } catch (err) {
     log.err('generatePresignedUrl', 'err', err);
-    return {
-      WasAnError: true,
-      Code: Codes.InternalServerError,
-      Message: 'An error occurred while generating the pre-signed URL.',
-    };
+    return InternalServerError('There was an untreated error on generatePutPresignedUrl.');
   }
 };
 
-export const generateDeletePresignedUrl = async (event: any): Promise<Response<PresignedUrl>> => {
+export const generateDeletePresignedUrl = async (event: any): Promise<Response> => {
   try {
-    // if(!event.body)
-    //   return {WasAnError: true, Code: Codes.BadRequest, Message: 'There was an problem with the body of request.' } 
+    if(!event.body || typeof event.body !== 'string')return BadRequest('There was an problem with the body of request.');
+    if(event.body.length > 100_000) return PayloadTooLarge('Request body too large.'); 
 
-    // if(event.body.length > 100_000)
-    //   return {WasAnError: true, Code: Codes.PayloadTooLarge, Message: 'Request body too large.' } 
-    
-    //! Parse request body
     const data: ImageInfo = JSON.parse(event.body);
-    if(!data.fileName || !data.itemId) {
-      return {
-        WasAnError: true,
-        Code: Codes.BadRequest,
-        Message: 'Invalid request body.',
-      };
-    }
+    if(!data) return BadRequest('There was an problem with the body of request.');
 
-    //! Unauthorized
-    const respAuth = await validateToken(event, ['Basic', 'Admin', 'Guest']);
-    if (respAuth.WasAnError || !respAuth.Data){
-      return {
-        WasAnError: true,
-        Code: respAuth.Code ?? Codes.Unauthorized,
-        Message: respAuth.Message ?? 'Unauthorized',
-      };
-    }
+    const authUser = await validateToken(event, ['Basic', 'Admin', 'Guest']);
+    if (!authUser || !authUser.User || !authUser.Authorized) return Unauthorized(authUser?.Message);
 
-    //! Generate pre-signed URL
     const bucketName = process.env.BK_OBJECTIVE_IMAGE_BUCKET_NAME ||'';
-    const key = `uploads/${respAuth.Data.UserId}/${data.itemId}/${data.fileName}`;
+    const key = `uploads/${authUser.User.UserId}/${data.itemId}/${data.fileName}`;
     const params = {
       Bucket: bucketName,
       Key: key,
@@ -846,26 +625,16 @@ export const generateDeletePresignedUrl = async (event: any): Promise<Response<P
 
     const deleteUrl = await s3.getSignedUrlPromise('deleteObject', params);
 
-    //* Happy path
-    return {
-      WasAnError: false,
-      Code: Codes.OK,
-      Message: 'Pre-signed URL generated successfully.',
-      Data: { url: deleteUrl },
-    };
+    return Ok('', { url: deleteUrl });
   } catch (err) {
     log.err('generatePresignedUrl', 'err', err);
-    return {
-      WasAnError: true,
-      Code: Codes.InternalServerError,
-      Message: 'An error occurred while generating the pre-signed URL.',
-    };
+    return InternalServerError('There was an untreated error on generatePresignedUrl.');
   }
 };
 
 // export const getDeviceData = async (event: any): Promise<Response<DeviceData[]>> => {
 //   try {
-//     if(!event.body) return {WasAnError: true, Code: Codes.BadRequest, Message: 'There was an problem with the body of request.' } 
+//     if(!event.body || typeof event.body !== 'string') return {WasAnError: true, Code: Codes.BadRequest, Message: 'There was an problem with the body of request.' } 
 
 //     //!Parsing problem
 //     const body: {DeviceId: string} = JSON.parse(event.body);
@@ -901,7 +670,7 @@ export const generateDeletePresignedUrl = async (event: any): Promise<Response<P
 
 // export const postDeviceData = async (event: any): Promise<string> => {
 //   try {
-//     if(!event.body) return "400" 
+//     if(!event.body || typeof event.body !== 'string') return "400" 
 
 //     //!Parsing problem
 //     const data: DeviceData[] = JSON.parse(event.body);

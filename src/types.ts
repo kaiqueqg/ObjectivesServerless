@@ -11,8 +11,15 @@ export interface DBUser{
 }
 
 //------------------------- TOKEN
-export interface AuthenticationToken{
+export interface AuthenticationRequest{
   JwtToken: string,
+  RoleRequired: string[],
+}
+
+export interface AuthenticationResponse{
+  Authorized: boolean,
+  Message: string,
+  User: DBUser|null,
 }
 
 export interface DBToken{
@@ -23,18 +30,12 @@ export interface DBToken{
 
 //------------------------- REQUESTS
 
-export interface Services{
+export interface Service{
   Name: string,
   Up: boolean,
   UpReason: string,
   RequestNewUserUp: boolean,
   RequestNewUserUpReason: string,
-}
-
-export interface Response extends APIGatewayProxyResult {
-  success: boolean;
-  message?: string;
-  exception?: string;
 }
 
 export const Codes = {
@@ -46,9 +47,14 @@ export const Codes = {
   Unauthorized: 401,
   Forbidden: 403,
   NotFound: 404,
+  Conflict: 409,
   PayloadTooLarge: 413,
   InternalServerError: 500,
+  NotImplemented: 501,
   ServiceUnavailable: 503,
+};
+
+export interface Response extends APIGatewayProxyResult {
 }
 
 export const DefaultResponse: Response = {
@@ -57,38 +63,71 @@ export const DefaultResponse: Response = {
     "Content-Type": "application/json",
     "Access-Control-Allow-Origin": "*",
   },
-  body: "{}",
-  success: false,
-  message: '',
-  exception: '',
+  body: '{}, message',
 }
+const CreateResponse = (statusCode:number, body: any, message?: string ): Response => {
+  console.log('CreateResponse - ' + JSON.stringify(body));
+  return {
+    ...DefaultResponse,
+    statusCode,
+    body: JSON.stringify({
+      data: body,
+      message: message?? 'No information.'
+    })
+  }
+}
+export const Ok = (message?: string, body?: any) => {
+  console.log('Ok - ' + JSON.stringify(body));
+  return CreateResponse(Codes.OK, body ?? {}, message);
+};
 
-export const DefaultOk: Response = {
-  ...DefaultResponse,
-  statusCode: Codes.OK,
-  success: true
-}
+export const Created = (message?: string, body?: any) => {
+  return CreateResponse(Codes.Created, body ?? {}, message);
+};
 
-export const DefaultNoContent: Response = {
-  ...DefaultResponse,
-  statusCode: Codes.NoContent,
-  success: true,
-}
+export const Accepted = (message?: string, body?: any) => {
+  return CreateResponse(Codes.Accepted, body ?? {}, message);
+};
 
-export const DefaultBadRequest: Response = {
-  ...DefaultResponse,
-  statusCode: Codes.BadRequest,
-}
+export const NoContent = (message?: string, body?: any) => {
+  return CreateResponse(Codes.NoContent, body ?? {}, message);
+};
 
-export const DefaultNotFound: Response = {
-  ...DefaultResponse,
-  statusCode: Codes.NotFound,
-  success: true,
-}
+export const BadRequest = (message?: string, body?: any) => {
+  return CreateResponse(Codes.BadRequest, body ?? {}, message);
+};
 
-export const DefaultInternalServerError: Response = {
-  ...DefaultResponse,
-}
+export const Unauthorized = (message?: string, body?: any) => {
+  return CreateResponse(Codes.Unauthorized, body ?? {}, message);
+};
+
+export const Forbidden = (message?: string, body?: any) => {
+  return CreateResponse(Codes.Forbidden, body ?? {}, message);
+};
+
+export const NotFound = (message?: string, body?: any) => {
+  return CreateResponse(Codes.NotFound, body ?? {}, message);
+};
+
+export const Conflict = (message?: string, body?: any) => {
+  return CreateResponse(Codes.Conflict, body ?? {}, message);
+};
+
+export const PayloadTooLarge = (message?: string, body?: any) => {
+  return CreateResponse(Codes.PayloadTooLarge, body ?? {}, message);
+};
+
+export const InternalServerError = (message?: string, body?: any) => {
+  return CreateResponse(Codes.InternalServerError, body ?? {}, message);
+};
+
+export const NotImplemented = (message?: string, body?: any) => {
+  return CreateResponse(Codes.NotImplemented, body ?? {}, message);
+};
+
+export const ServiceUnavailable = (message?: string, body?: any) => {
+  return CreateResponse(Codes.ServiceUnavailable, body ?? {}, message);
+};
 
 //------------------------- LOG
 export enum LogLevel { 

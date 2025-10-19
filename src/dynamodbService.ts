@@ -1,6 +1,6 @@
 import { GetItemOutput, QueryOutput } from "aws-sdk/clients/dynamodb";
 import log from "./log";
-import { Codes, DefaultBadRequest, DefaultDivider, DefaultExercise, DefaultGrocery, DefaultImage, DefaultInternalServerError, DefaultItem, DefaultLink, DefaultLocation, DefaultMedicine, DefaultNoContent, DefaultNote, DefaultNotFound, DefaultObjective, DefaultOk, DefaultQuestion, DefaultResponse, DefaultStep, DefaultWait, DeviceData, Item, ItemType, Objective, ObjectiveList, Response, Services, StepImportance } from "./types";
+import { Codes, DefaultDivider, DefaultExercise, DefaultGrocery, DefaultImage, DefaultItem, DefaultLink, DefaultLocation, DefaultMedicine, DefaultNote, DefaultObjective, DefaultQuestion, DefaultResponse, DefaultStep, DefaultWait, DeviceData, InternalServerError, Item, ItemType, Objective, ObjectiveList, Response, Service, StepImportance } from "./types";
 
 const AWS = require('aws-sdk');
 const dynamoDB = new AWS.DynamoDB.DocumentClient();
@@ -183,31 +183,16 @@ const db = {
 
     return await dynamoDB.query(params).promise();
   },
-  //^ HTTP - CHECK
-  async getObjectiveList(userId: string): Promise<Response>{
-    try {
-      
-      const result = await this.queryObjectiveList(userId);
+  async getObjectiveList(userId: string): Promise<Objective[]|null>{
+    const result = await this.queryObjectiveList(userId);
 
-      if(!result.Items){
-        return {
-          ...DefaultNotFound,
-          message: 'No objetives found.',
-        }
-      }
-
-      const items = (result.Items ?? []) as unknown as Objective[];
-      const newObjs = items.map(obj => this.doObjectiveNewAttributeCheck(obj));
-
-      return {...DefaultOk, body: JSON.stringify(newObjs) }
-    } catch (err) {
-      log.err('getObjectiveList','err', err);
-      const response: Response = {...DefaultInternalServerError,
-        message: 'Problem trying to get objective list from database.',
-        exception: JSON.stringify(err),
-      };
-      return response;
+    if(result.Items){
+      const objs = result.Items as unknown as  Objective[];
+      const newObjs = objs.map(obj => this.doObjectiveNewAttributeCheck(obj));
+      return newObjs;
     }
+
+    return null;
   },
   async queryObjectiveItemList(userIdObjectiveId: string): Promise<QueryOutput> {
     const params = {
@@ -219,89 +204,59 @@ const db = {
     };
     return await dynamoDB.query(params).promise();
   },
-  //^ HTTP - CHECK
-  async getObjectiveItemList(userIdObjectiveId: string): Promise<Response>{
-    try {
-      const result = await this.queryObjectiveItemList(userIdObjectiveId);
+  async getObjectiveItemList(userIdObjectiveId: string): Promise<Item[]|null>{
+    const result = await this.queryObjectiveItemList(userIdObjectiveId);
 
-      const items = (result.Items ?? []) as unknown as Item[];
+    if(result.Items){
+      const items = result.Items as unknown as Item[];
       const newItems = items.map(i => this.doItemNewAttributeCheck(i));
-
-      if(!result.Items){
-        return {...DefaultNotFound,
-          statusCode: Codes.NotFound, 
-          message: 'No items found.',
-        }
-      }
-
-      return {...DefaultOk, body: JSON.stringify(newItems) }
-    } catch (err) {
-      log.err('getObjectiveItemList', 'err', err);
-      return {...DefaultInternalServerError,
-        message: 'Problem trying to get item list from database.',
-        exception: JSON.stringify(err),
-      };
+      return newItems;
     }
-  },
-  //^ HTTP - CHECK
-  async getObjective(userId: string, objectiveId: string): Promise<Response>{
-    try {
-      const params ={
-        TableName: objectivesTableName,
-        Key:{ UserId: userId, ObjectiveId: objectiveId }
-      }
-  
-      const result:GetItemOutput = await dynamoDB.get(params).promise();
-      if(!result.Item) return {...DefaultNotFound, message: 'No objective found.'}
-  
-      const element = this.doObjectiveNewAttributeCheck(result.Item as unknown as Objective);
 
-      return { ...DefaultOk, body: JSON.stringify(element) }
-    } catch (err) {
-      log.err('getObjective', 'err', err);
-      return {...DefaultInternalServerError,
-        message: 'Problem trying to get objective from database.',
-        exception: JSON.stringify(err),
-      };
+    return null;
+  },
+  async getObjective(userId: string, objectiveId: string): Promise<Objective|null>{
+    const params ={
+      TableName: objectivesTableName,
+      Key:{ UserId: userId, ObjectiveId: objectiveId }
     }
+
+    const result:GetItemOutput = await dynamoDB.get(params).promise();
+    if(result.Item){
+      return this.doObjectiveNewAttributeCheck(result.Item as unknown as Objective);;
+    }
+    
+    return null;
   },
-  //^ HTTP - CHECK - 10ARRAY
-  async putObjectives(userId: string, objectives: Objective[]): Promise<Response>{
-    try {
-      if(objectives.length > 10) 
-        return {...DefaultBadRequest, success: false, message: "You can't put more than 10 objectives per same request."}
+  async putObjectives(userId: string, objectives: Objective[]): Promise<boolean>{
+    if(objectives.length > 10) 
+      return false;
 
-      let resData: Objective[] = [];
-      for (let i = 0; i < objectives.length; i++) {
-        const obj = objectives[i];
+    for (let i = 0; i < objectives.length; i++) {
+      const obj = objectives[i];
 
-        //^ Make sure the correct userId
-        obj.UserId = userId; 
-        if(obj.ObjectiveId === "") obj.ObjectiveId = generateId();
-        
-        const newObj:Objective = this.doObjectiveNewAttributeCheck(obj);
-
-        const params = {
-          TableName: objectivesTableName,
-          Item: { ...newObj }
-        }
-        await dynamoDB.put(params).promise();
-
-        resData.push(obj);
-      }
+      //^ Make sure the correct userId
+      obj.UserId = userId; 
+      if(obj.ObjectiveId === "") obj.ObjectiveId = generateId();
       
-      return {...DefaultOk, body: JSON.stringify(resData), }
-    } catch (err) {
-      log.err('putObjective', 'err', err);
-      return {...DefaultResponse,
-          message: 'Problem trying to put objectives from database.',
-          exception: JSON.stringify(err),
-      };
+      const newObj:Objective = this.doObjectiveNewAttributeCheck(obj);
+
+      const params = {
+        TableName: objectivesTableName,
+        Item: { ...newObj }
+      }
+      await dynamoDB.put(params).promise();
     }
+    
+    return true;
   },
-  //^ HTTP - CHECK
-  async deleteObjective(userId: string, objective: Objective): Promise<Response>{
-    try {
+  async deleteObjectives(userId: string, objectives: Objective[]): Promise<boolean|boolean>{
+    if(objectives.length > 10) 
+      return false;
+
+    for (let i = 0; i < objectives.length; i++) {
+      const objective = objectives[i];
+      
       //^ First delete all Items of this Objective
       const result = await this.queryObjectiveItemList(userId+objective.ObjectiveId);
       const items = (result.Items ?? []) as unknown as Item[];
@@ -314,133 +269,71 @@ const db = {
         TableName: objectivesTableName,
         Key: { UserId: userId, ObjectiveId: objective.ObjectiveId }
       };
-  
+
       await dynamoDB.delete(params).promise();
-  
-      return {...DefaultOk, statusCode: Codes.OK, };
-    } catch (err) {
-      log.err('deleteObjective', 'err', err);
-      return {...DefaultInternalServerError,
-        message: 'Problem trying to delete objective from database.',
-        exception: JSON.stringify(err),
-      };
     }
+    
+    return true;
   },
-  //^ HTTP - CHECK
-  async getObjectiveItem(userIdObjectiveId: string, itemId: string): Promise<Response>{
-    try {
-      const params ={
+  async getObjectiveItem(userIdObjectiveId: string, itemId: string): Promise<Item|null>{
+    const params ={
+      TableName: itemsTableName,
+      Key:{ UserIdObjectiveId: userIdObjectiveId, ItemId: itemId }
+    }
+
+    const result = await dynamoDB.get(params).promise();
+
+    if(result.Item){
+      return this.doItemNewAttributeCheck(result.Item);
+    }
+
+    return null;
+  },
+  async putObjectiveItems(userId: string, items: Item[]): Promise<boolean>{ // TODO needs treatment for partial put
+    if(items.length > 10) return false;
+
+    for (let i = 0; i < items.length; i++) {
+      items[i].UserIdObjectiveId = userId + ((items[i].UserIdObjectiveId.length > 40) ? items[i].UserIdObjectiveId.slice(-40) : items[i].UserIdObjectiveId);
+
+      if(items[i].ItemId === "") items[i].ItemId = generateId();
+
+      const newItem:Objective = this.doItemNewAttributeCheck(items[i]);
+
+      const params = {
         TableName: itemsTableName,
-        Key:{ UserIdObjectiveId: userIdObjectiveId, ItemId: itemId }
+        Item: { ...newItem }
       }
-  
-      let res: Response;
-      const result = await dynamoDB.get(params).promise();
-  
-      if(result.Item){
-        res = { ...DefaultOk, body: JSON.stringify(result.Item) }
-      }
-      else{
-        res = {...DefaultNotFound,
-          message: 'Not item found.',
-        }
-      }
-  
-      return res;
-    } catch (err) {
-      log.err('getItem', 'err', err);
-      return {...DefaultInternalServerError,
-        message: 'Problem trying to get item from database.',
-        exception: JSON.stringify(err),
-      };
+      await dynamoDB.put(params).promise();
     }
+    
+    return true;
   },
-  //^ HTTP - CHECK - 10ARRAY
-  async putObjectiveItems(userId: string, items: Item[]): Promise<Response>{
-    try {
-      if(items.length > 10){
-        return {...DefaultBadRequest,
-          success: false, message: "You can't put more than 10 items per same request."
-        }
-      }
+  async deleteObjectiveItems(userId:string, items: Item[]): Promise<boolean>{ // TODO needs treatment for partial delete
+    if(items.length > 10) return false;
 
-      let res: Response;
-      let resData: Item[] = [];
-      try {
-        for (let i = 0; i < items.length; i++) {
-          items[i].UserIdObjectiveId = userId + ((items[i].UserIdObjectiveId.length > 40) ? items[i].UserIdObjectiveId.slice(-40) : items[i].UserIdObjectiveId);
-    
-          if(items[i].ItemId === "") items[i].ItemId = generateId();
-
-          const newItem:Objective = this.doItemNewAttributeCheck(items[i]);
-    
-          const params = {
-            TableName: itemsTableName,
-            Item: { ...newItem }
-          }
-          await dynamoDB.put(params).promise();
-          resData.push(items[i]);
-        }
-      } catch (err) {log.err('putObjectives loop', 'err', err);}
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
       
-      res = {...DefaultOk,
-        body: JSON.stringify(items),
-      }
+      item.UserIdObjectiveId = userId + ((item.UserIdObjectiveId.length > 40) ? item.UserIdObjectiveId.slice(-40) : item.UserIdObjectiveId);
 
-      return res;
-    } catch (err) {
-      log.err('putItem', 'err', err);
-      const response: Response = {...DefaultInternalServerError,
-        message: 'Problem trying to put item from database.',
-        exception: JSON.stringify(err),
+      const params = {
+        TableName: itemsTableName,
+        Key: { UserIdObjectiveId: item.UserIdObjectiveId, ItemId: item.ItemId }
       };
-      return response;
+      await dynamoDB.delete(params).promise();
     }
+
+    return true;
   },
-  //^ HTTP - CHECK - 10ARRAY
-  async deleteObjectiveItems(userId:string, items: Item[]): Promise<Response>{
-    try {
-      if(items.length > 10){
-        return {...DefaultBadRequest,
-          success: false, message: "You can't delete more than 10 items per same request."
-        }
-      }
-
-      let resData: Item[] = [];
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        
-        item.UserIdObjectiveId = userId + ((item.UserIdObjectiveId.length > 40) ? item.UserIdObjectiveId.slice(-40) : item.UserIdObjectiveId);
-
-        const params = {
-          TableName: itemsTableName,
-          Key: { UserIdObjectiveId: item.UserIdObjectiveId, ItemId: item.ItemId }
-        };
-        try {
-          await dynamoDB.delete(params).promise();
-        } catch (err) {}
-
-
-      }
-      return {...DefaultOk,
-        body: JSON.stringify(resData),
-      };
-    } catch (err) {
-      log.err('deleteItem', 'err', err);
-      return {...DefaultInternalServerError,
-        message: 'Problem trying to delete item from database.',
-        exception: JSON.stringify(err),
-      };
-    }
-  },
-  //^ HTTP - CHECK - 10ARRAY
-  async syncObjectivesList(userId: string, objectivesList: ObjectiveList): Promise<Response> {
+  async syncObjectivesList(userId: string, objectivesList: ObjectiveList): Promise<ObjectiveList|null> {
     try {
       //! GET DB ITEMS FOR LATER
       let dbItems: Item[] = [];
       let dbObjectives: Objective[] = [];
 
+      log.d('syncObjectivesList - userId', userId);
       const result: QueryOutput = await this.queryObjectiveList(userId);
+      log.d('syncObjectivesList - result', result);
       if(result.Items) {
         dbObjectives = result.Items as unknown as Objective[];
         for(let i = 0; i < dbObjectives.length; i++){
@@ -451,199 +344,259 @@ const db = {
           }
         }
       }
+      log.d('syncObjectivesList - dbItems', dbItems);
+      log.d('syncObjectivesList - dbObjectives', dbObjectives);
 
       //! DELETE OBJECTIVES
-      if(objectivesList.DeleteObjectives) {
-        const deletedObjectives = objectivesList.DeleteObjectives;
-        for(let i = 0; i < deletedObjectives.length; i++){
-          const deleteObjective = deletedObjectives[i];
-          if(deleteObjective.ObjectiveId && deleteObjective){
-            await this.deleteObjective(userId, deleteObjective);
-          }
-        }
+      if (objectivesList.DeleteObjectives?.length) {
+        const deletedObjectives = objectivesList.DeleteObjectives.filter(
+          o => o && o.ObjectiveId
+        );
+
+        await Promise.all(
+          deletedObjectives.map(o => this.deleteObjectives(userId, [o]))
+        );
+
+        log.d(`Deleted ${deletedObjectives.length} objectives`);
       }
+      // if(objectivesList.DeleteObjectives) {
+      //   const deletedObjectives = objectivesList.DeleteObjectives;
+      //   for(let i = 0; i < deletedObjectives.length; i++){
+      //     const deleteObjective = deletedObjectives[i];
+      //     if(deleteObjective && deleteObjective.ObjectiveId){
+      //       await this.deleteObjectives(userId, [deleteObjective]);
+      //     }
+      //   }
+      // }
       log.d('db - obj deleted');
 
       //! DELETE ITEMS
-      if(objectivesList.DeleteItems) {
-        const deletedItems = objectivesList.DeleteItems;
-        for(let i = 0; i < deletedItems.length; i++){
-          const deleteItem = deletedItems[i];
-          if(deleteItem.UserIdObjectiveId && deleteItem.UserIdObjectiveId && deleteItem.ItemId){
-            await this.deleteObjectiveItems(userId, [deleteItem]);
-          }
-        }
+      if (objectivesList.DeleteItems?.length) {
+        const deletedItems = objectivesList.DeleteItems.filter(
+          i => i && i.UserIdObjectiveId && i.ItemId
+        );
+
+        await Promise.all(
+          deletedItems.map(i => this.deleteObjectiveItems(userId, [i]))
+        );
+
+        log.d(`Deleted ${deletedItems.length} items`);
       }
+      // if(objectivesList.DeleteItems) {
+      //   const deletedItems = objectivesList.DeleteItems;
+      //   for(let i = 0; i < deletedItems.length; i++){
+      //     const deleteItem = deletedItems[i];
+      //     if(deleteItem.UserIdObjectiveId && deleteItem.ItemId){
+      //       await this.deleteObjectiveItems(userId, [deleteItem]);
+      //     }
+      //   }
+      // }
       log.d('db - deletedItems');
 
       //! PUT ITEMS
-      if(objectivesList.Items) {
-        let items = objectivesList.Items;
-        for(let i = 0; i < items.length; i++){
-          const item = items[i];
-          const equalIt = dbItems.find(it => it.UserIdObjectiveId === item.UserIdObjectiveId);
-          
-          if(equalIt && equalIt.LastModified && item.LastModified){
-            const syncDate: Date = new Date(item.LastModified);
-            const dbDate: Date = new Date(equalIt.LastModified);
-            
-            if(dbDate < syncDate) {
+      if (objectivesList.Items?.length) {
+        const items = objectivesList.Items;
+
+        await Promise.all(
+          items.map(async item => {
+            if (!item || !item.UserIdObjectiveId || !item.ItemId) return;
+
+            const equalIt = dbItems.find(
+              it => it.UserIdObjectiveId === item.UserIdObjectiveId && it.ItemId === item.ItemId
+            );
+
+            if (equalIt?.LastModified && item.LastModified) {
+              const dbDate = new Date(equalIt.LastModified);
+              const syncDate = new Date(item.LastModified);
+
+              if (!isNaN(dbDate.getTime()) && !isNaN(syncDate.getTime()) && dbDate < syncDate) {
+                await this.putObjectiveItems(userId, [item]);
+              }
+            } else {
               await this.putObjectiveItems(userId, [item]);
-              // log.d('Item updated', item);
             }
-            else{
-              // log.d('Item: ' + item + ' was denied because of date comparion. ', dbDate.toISOString(), syncDate.toISOString());
-            }
-          }
-          else{
-            await this.putObjectiveItems(userId, [item]);
-            // log.d('else', item);
-          }
+          })
+        );
+
+        log.d(`Synced ${items.length} items`);
         }
-      }
+      // if(objectivesList.Items) {
+      //   let items = objectivesList.Items;
+      //   for(let i = 0; i < items.length; i++){
+      //     const item = items[i];
+      //     const equalIt = dbItems.find(it => it.UserIdObjectiveId === item.UserIdObjectiveId);
+          
+      //     if(equalIt && equalIt.LastModified && item.LastModified){
+      //       const syncDate: Date = new Date(item.LastModified);
+      //       const dbDate: Date = new Date(equalIt.LastModified);
+            
+      //       if(dbDate < syncDate) {
+      //         await this.putObjectiveItems(userId, [item]);
+      //         // log.d('Item updated', item);
+      //       }
+      //       else{
+      //         // log.d('Item: ' + item + ' was denied because of date comparion. ', dbDate.toISOString(), syncDate.toISOString());
+      //       }
+      //     }
+      //     else{
+      //       await this.putObjectiveItems(userId, [item]);
+      //       // log.d('else', item);
+      //     }
+      //   }
+      // }
       log.d('db - items putted');
 
       //! PUT OBJECTIVES
-      if(objectivesList.Objectives) {
-        let objectives = objectivesList.Objectives;
-        for(let i = 0; i < objectives.length; i++){
-          const objective = objectives[i];
-          const equalCat = dbObjectives.find(cat => cat.UserId === objective.UserId);
-  
-          if(equalCat && equalCat.LastModified && objective.LastModified){
-            const dbDate: Date = new Date(equalCat.LastModified);
-            const syncDate: Date = new Date(objective.LastModified);
-  
-            if(dbDate < syncDate) {
+      if (objectivesList.Objectives?.length) {
+        const objectives = objectivesList.Objectives;
+
+        await Promise.all(
+          objectives.map(async objective => {
+            if (!objective || !objective.ObjectiveId) return;
+
+            const equalObj = dbObjectives.find(
+              o => o.ObjectiveId === objective.ObjectiveId
+            );
+
+            if (equalObj?.LastModified && objective.LastModified) {
+              const dbDate = new Date(equalObj.LastModified);
+              const syncDate = new Date(objective.LastModified);
+
+              if (
+                !isNaN(dbDate.getTime()) &&
+                !isNaN(syncDate.getTime()) &&
+                dbDate < syncDate
+              ) {
+                await this.putObjectives(userId, [objective]);
+              }
+            } else {
               await this.putObjectives(userId, [objective]);
             }
-            else{
-              // log.d('Objective: ' + objective.Title + ' was denied because of date comparion. ', dbDate.toISOString(), syncDate.toISOString());
-            }
-          }
-          else{
-            await this.putObjectives(userId, [objective]);
-          }
-        }
+          })
+        );
+
+        log.d(`Synced ${objectives.length} objectives`);
       }
+      // if(objectivesList.Objectives) {
+      //   let objectives = objectivesList.Objectives;
+      //   for(let i = 0; i < objectives.length; i++){
+      //     const objective = objectives[i];
+      //     const equalCat = dbObjectives.find(cat => cat.ObjectiveId === objective.ObjectiveId);
+  
+      //     if(equalCat && equalCat.LastModified && objective.LastModified){
+      //       const dbDate: Date = new Date(equalCat.LastModified);
+      //       const syncDate: Date = new Date(objective.LastModified);
+  
+      //       if(dbDate < syncDate) {
+      //         await this.putObjectives(userId, [objective]);
+      //       }
+      //       else{
+      //         // log.d('Objective: ' + objective.Title + ' was denied because of date comparion. ', dbDate.toISOString(), syncDate.toISOString());
+      //       }
+      //     }
+      //     else{
+      //       await this.putObjectives(userId, [objective]);
+      //     }
+      //   }
+      // }
       log.d('db - objs putted');
 
       //^ Getting the final objective and item list
-      const queryObjectives: QueryOutput = await this.queryObjectiveItemList(userId);
+      const queryObjectives: QueryOutput = await this.queryObjectiveList(userId);
 
       if(!queryObjectives.Items){
-        return {...DefaultInternalServerError,
-          message: 'Problem trying to get objectives list from database.'
-        }
+        return null
       }
       
-      log.d('db - got new obj list');
+      log.d('db - queryObjectives ', queryObjectives);
 
       let newObjectives: Objective[] = queryObjectives.Items as unknown as Objective[];
       let newItems: Item[] = []
       for(let i = 0; i < newObjectives.length; i++){
         const queryItems: QueryOutput = await this.queryObjectiveItemList(userId + newObjectives[i].ObjectiveId);
         if(!queryItems.Items)
-          return {...DefaultInternalServerError,message: 'Problem trying to get objectives list from database.'}
+          return null;
 
         newItems.push(...(queryItems.Items as unknown as Item[]));
       }
+      log.d('db - newItems ', newItems);
 
-
-      log.d('db - added new items to list');
       const rtnObjectiveList: ObjectiveList = {Objectives: newObjectives, Items: newItems}
 
-      log.d('db - returning');
-
-      return {...DefaultOk, body: JSON.stringify(rtnObjectiveList)}
+      return rtnObjectiveList;
     } catch (err) {
       log.err('db.syncObjectivesList', 'err', err);
-      return {...DefaultInternalServerError,
-        message: 'Problem trying to SyncObjectivesList from database.',
-        exception: JSON.stringify(err),
-      };
+      return null;
     }
   },
 
-  async getService(): Promise<Response>{
-    try {
-      const params ={
-        TableName: servicesTableName,
-        Key:{ Name: 'GroceryListServerless' }
-      }
-  
-      let res: Response
-      const result = await dynamoDB.get(params).promise();
-  
-      if(result.Item){
-        res = { ...DefaultOk, body:JSON.stringify(result.Item) }
-      }
-      else{
-        res = { ...DefaultNoContent }
-      }
-  
-      return res;
-    } catch (err) {
-      const response: Response = {...DefaultInternalServerError,
-        message: 'Problem trying to get status from database.',
-        exception: JSON.stringify(err),
-      };
-      return response;
+  async getService(): Promise<Service|null> {
+    const params = {
+      TableName: servicesTableName,
+      Key: { Name: 'GroceryListServerless' },
+    };
+
+    const result = await dynamoDB.get(params).promise();
+    if (result.Item) {
+      const dbService: Service = result.Item as Service;
+      return dbService;
     }
+
+    return null;
   },
 
-  async getDeviceData(userId: string): Promise<Response<DeviceData[]>>{
-    try {
-      const params = {
-        TableName: deviceTableName,
-        KeyConditionExpression: "UserId = :UserId",
-        ExpressionAttributeValues: {
-          ":UserId": userId,
-        },
-      };
-      let res: Response<DeviceData[]>;
-      const result = await dynamoDB.query(params).promise();
+  async getDeviceData(userId: string){
+    // try {
+    //   const params = {
+    //     TableName: deviceTableName,
+    //     KeyConditionExpression: "UserId = :UserId",
+    //     ExpressionAttributeValues: {
+    //       ":UserId": userId,
+    //     },
+    //   };
+    //   let res: Response<DeviceData[]>;
+    //   const result = await dynamoDB.query(params).promise();
 
-      if(result.Items && result.Items.length > 0){
-        res = { WasAnError: false, Data: result.Items, Code: Codes.OK, }
-      }
-      else{
-        res = { WasAnError: false, Data: [], Code: Codes.NoContent, }
-      }
-      return res;
-    } catch (err) {
-      log.err('getDeviceData', 'err', err);
-      const response: Response<DeviceData[]> = {
-        WasAnError: true,
-        Message: 'Problem trying to get device data from database.',
-        Exception: JSON.stringify(err),
-        Code: Codes.InternalServerError
-      };
-      return response;
-    }
+    //   if(result.Items && result.Items.length > 0){
+    //     res = { WasAnError: false, Data: result.Items, Code: Codes.OK, }
+    //   }
+    //   else{
+    //     res = { WasAnError: false, Data: [], Code: Codes.NoContent, }
+    //   }
+    //   return res;
+    // } catch (err) {
+    //   log.err('getDeviceData', 'err', err);
+    //   const response: Response<DeviceData[]> = {
+    //     WasAnError: true,
+    //     Message: 'Problem trying to get device data from database.',
+    //     Exception: JSON.stringify(err),
+    //     Code: Codes.InternalServerError
+    //   };
+    //   return response;
+    // }
   },
-  async postDeviceData(deviceData: DeviceData[]): Promise<string>{
-    try {
-      let now = new Date();
-      now.setHours(now.getHours() - 3);
-      for (let i = 0; i < deviceData.length; i++) {
-        deviceData[i].DataId = generateId();
-        deviceData[i].DateAdded = now.toISOString();
-      }
+  async postDeviceData(deviceData: DeviceData[]){
+    // try {
+    //   let now = new Date();
+    //   now.setHours(now.getHours() - 3);
+    //   for (let i = 0; i < deviceData.length; i++) {
+    //     deviceData[i].DataId = generateId();
+    //     deviceData[i].DateAdded = now.toISOString();
+    //   }
 
-      for (let i = 0; i < deviceData.length; i++) {
-        const params = {
-          TableName: deviceTableName,
-          Item: { ...deviceData[i] }
-        }
-        await dynamoDB.put(params).promise();
-      }
+    //   for (let i = 0; i < deviceData.length; i++) {
+    //     const params = {
+    //       TableName: deviceTableName,
+    //       Item: { ...deviceData[i] }
+    //     }
+    //     await dynamoDB.put(params).promise();
+    //   }
 
-      return "200";
-    } catch (err) {
-      log.err('postDeviceData', 'err', err);
-      return "500";
-    }
+    //   return "200";
+    // } catch (err) {
+    //   log.err('postDeviceData', 'err', err);
+    //   return "500";
+    // }
   },
 }
 

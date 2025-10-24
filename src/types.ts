@@ -66,7 +66,7 @@ export const DefaultResponse: Response = {
   body: '{}, message',
 }
 const CreateResponse = (statusCode:number, body: any, message?: string ): Response => {
-  console.log('CreateResponse - ' + JSON.stringify(body));
+  console.log('CreateResponse ' + statusCode + ' - ' + JSON.stringify(body));
   return {
     ...DefaultResponse,
     statusCode,
@@ -213,7 +213,7 @@ export interface ImageInfo {
 }
 export interface PresignedUrl { url: string }
 
-export enum ItemType{ Step, Wait, Question, Note, Location, Divider, Grocery, Medicine, Exercise, Links, ItemFake, Image }
+export enum ItemType{ Step, Wait, Question, Note, Location, Divider, Grocery, Medicine, Exercise, Link, ItemFake, Image, House }
 
 export interface Item {
   ItemId: string,

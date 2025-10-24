@@ -46,6 +46,7 @@ import {
   InternalServerError,
   ServiceUnavailable,
   PayloadTooLarge,
+  House,
 } from "./types";
 
 const lambda = new AWS.Lambda();
@@ -86,6 +87,7 @@ const validateToken = async (event: APIGatewayProxyEvent, role: string[] = ["Bas
   return null;
 };
 
+//TODO I need to check this, put in a diff file or something else
 const checkObjective = (o: Objective): Objective => {
   return(
     {
@@ -108,6 +110,7 @@ const checkObjective = (o: Objective): Objective => {
   )
 }
 
+//TODO I need to check this, put in a diff file or something else
 const checkItem = (i: Item): Item => {
   const base: Item = {
     ItemId: String(i.ItemId ?? ''),
@@ -200,7 +203,7 @@ const checkItem = (i: Item): Item => {
           : [],
       } as Exercise;
 
-    case ItemType.Links:
+    case ItemType.Link:
       return {
         ...base,
         Title: String((i as Link).Title ?? ''),
@@ -217,6 +220,21 @@ const checkItem = (i: Item): Item => {
         Height: Number((i as Image).Height ?? 0),
         IsDisplaying: Boolean((i as Image).IsDisplaying ?? false),
       } as Image;
+
+    case ItemType.House:
+      return {
+        ...base,
+        Title: String((i as House).Title ?? ''),
+        Listing: String((i as House).Listing ?? ''),
+        MapLink: String((i as House).MapLink ?? ''),
+        MeterSquare: String((i as House).MeterSquare ?? ''),
+        Rating: Number((i as House).Rating ?? 0),
+        Address: String((i as House).Address ?? ''),
+        TotalPrice: Number((i as House).TotalPrice ?? 0),
+        WasContacted: Boolean((i as House).WasContacted ?? false),
+        Details: String((i as House).Details ?? ''),
+        Attention: String((i as House).Attention ?? ''),
+      } as House;
 
     case ItemType.ItemFake:
       return { ...base } as Item;
@@ -367,7 +385,7 @@ export const deleteObjectives = async (event: any): Promise<Response> => {
     if(!obj) return InternalServerError('There was an untreated error on deleteObjective.');
 
     log.d('deleteObjectives - ok')
-    return Ok('', obj);
+    return Ok('', rawObj);
   } catch (err) {
     log.err('deleteObjective', 'err', err);
     return InternalServerError('There was an untreated error on deleteObjective.');
@@ -407,7 +425,7 @@ export const putObjectiveItems = async (event: any): Promise<Response> => {
     if(event.body.length > 100_000) return PayloadTooLarge('Request body too large.'); 
 
     const rawItems: Item[] = JSON.parse(event.body);
-    log.d('putObjectiveItems - rawItems - ', rawItems)
+    log.d('putObjectiveItems - rawItems - ', rawItems.length)
     if(!rawItems) return BadRequest('There was an problem with the body of request.');
 
     const authUser = await validateToken(event, ['Basic', 'Admin', 'Guest']);
@@ -419,7 +437,7 @@ export const putObjectiveItems = async (event: any): Promise<Response> => {
       let e = rawItems[i];
       checkedItems.push(checkItem(e))
     }
-    log.d('putObjectiveItems - checkedItems - ', checkedItems)
+    log.d('putObjectiveItems - checkedItems - ', checkedItems.length)
 
     const item = await db.putObjectiveItems(authUser.User.UserId, checkedItems);
     log.d('putObjectiveItems - item - ', item)
@@ -432,26 +450,26 @@ export const putObjectiveItems = async (event: any): Promise<Response> => {
     return InternalServerError('There was an untreated error on putObjectiveItem.');
   }
 }
-export const deleteObjectiveItem = async (event: any) => {
+export const deleteObjectiveItems = async (event: any) => {
   try {
     log.d('deleteObjectiveItem - ', event)
     if(!event.body || typeof event.body !== 'string')return BadRequest('There was an problem with the body of request.');
     if(event.body.length > 100_000) return PayloadTooLarge('Request body too large.'); 
 
-    const rawItem: Item = JSON.parse(event.body);
-    log.d('deleteObjectiveItem - rawItem - ', rawItem)
-    if(!rawItem) return BadRequest('There was an problem with the body of request.');
+    const rawItems: Item[] = JSON.parse(event.body);
+    log.d('deleteObjectiveItem - rawItems - ', rawItems)
+    if(!rawItems) return BadRequest('There was an problem with the body of request.');
 
     const authUser = await validateToken(event, ['Basic', 'Admin', 'Guest']);
     log.d('deleteObjectiveItem - authUser - ', authUser)
     if (!authUser || !authUser.User || !authUser.Authorized) return Unauthorized(authUser?.Message);
     
-    const item = await db.deleteObjectiveItems(authUser.User.UserId, [rawItem]);
-    log.d('deleteObjectiveItem - item - ', item)
-    if(!item) return InternalServerError('There was an untreated error on deleteObjectiveItem.');
+    const items = await db.deleteObjectiveItems(authUser.User.UserId, rawItems);
+    log.d('deleteObjectiveItem - items - ', items)
+    if(!items) return InternalServerError('There was an untreated error on deleteObjectiveItem.');
 
     log.d('deleteObjectiveItem - ok')
-    return Ok();
+    return Ok('', items);
   } catch (err) {
     log.err('deleteObjectiveItem', 'err', err);
     return InternalServerError('There was an untreated error on deleteObjectiveItem.');

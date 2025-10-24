@@ -1,6 +1,6 @@
 import { GetItemOutput, QueryOutput } from "aws-sdk/clients/dynamodb";
 import log from "./log";
-import { Codes, DefaultDivider, DefaultExercise, DefaultGrocery, DefaultImage, DefaultItem, DefaultLink, DefaultLocation, DefaultMedicine, DefaultNote, DefaultObjective, DefaultQuestion, DefaultResponse, DefaultStep, DefaultWait, DeviceData, InternalServerError, Item, ItemType, Objective, ObjectiveList, Response, Service, StepImportance } from "./types";
+import { Codes, DefaultDivider, DefaultExercise, DefaultGrocery, DefaultHouse, DefaultImage, DefaultItem, DefaultLink, DefaultLocation, DefaultMedicine, DefaultNote, DefaultObjective, DefaultQuestion, DefaultResponse, DefaultStep, DefaultWait, DeviceData, InternalServerError, Item, ItemType, Objective, ObjectiveList, Response, Service, StepImportance } from "./types";
 
 const AWS = require('aws-sdk');
 const dynamoDB = new AWS.DynamoDB.DocumentClient();
@@ -145,7 +145,7 @@ const db = {
           BodyImages: Array.isArray(item.BodyImages) ? item.BodyImages : [],
         };
 
-      case ItemType.Links:
+      case ItemType.Link:
         return {
           ...DefaultLink,
           ...base,
@@ -163,6 +163,22 @@ const db = {
           Width: typeof item.Width === 'number' ? item.Width : 0,
           Height: typeof item.Height === 'number' ? item.Height : 0,
           IsDisplaying: typeof item.IsDisplaying === 'boolean' ? item.IsDisplaying : true,
+        };
+
+      case ItemType.House:
+        return {
+          ...DefaultHouse,
+          ...base,
+          Title: typeof item.Title === 'string' ? item.Title : '',
+          Listing: typeof item.Listing === 'string' ? item.Listing : '',
+          MapLink: typeof item.MapLink === 'string' ? item.MapLink : '',
+          MeterSquare: typeof item.MeterSquare === 'string' ? item.MeterSquare : '',
+          Rating: typeof item.Rating === 'number' ? item.Rating : 0,
+          Address: typeof item.Address === 'string' ? item.Address : '',
+          TotalPrice: typeof item.TotalPrice === 'number' ? item.TotalPrice : 0,
+          WasContacted: typeof item.WasContacted === 'boolean' ? item.WasContacted : true,
+          Details: typeof item.Details === 'string' ? item.Details : '',
+          Attention: typeof item.Attention === 'string' ? item.Attention : '',
         };
 
       case ItemType.ItemFake:
@@ -250,9 +266,8 @@ const db = {
     
     return true;
   },
-  async deleteObjectives(userId: string, objectives: Objective[]): Promise<boolean|boolean>{
-    if(objectives.length > 10) 
-      return false;
+  async deleteObjectives(userId: string, objectives: Objective[]): Promise<Objective[]|null>{
+    if(objectives.length > 10) return null;
 
     for (let i = 0; i < objectives.length; i++) {
       const objective = objectives[i];
@@ -273,7 +288,7 @@ const db = {
       await dynamoDB.delete(params).promise();
     }
     
-    return true;
+    return objectives;
   },
   async getObjectiveItem(userIdObjectiveId: string, itemId: string): Promise<Item|null>{
     const params ={
@@ -290,7 +305,23 @@ const db = {
     return null;
   },
   async putObjectiveItems(userId: string, items: Item[]): Promise<boolean>{ // TODO needs treatment for partial put
-    if(items.length > 10) return false;
+    log.d('db.putObjectiveItems - ', items.length)
+    if(items.length > 10) {
+      log.d('db.putObjectiveItems - items array bigger than 10. ' + items.length)
+      return false;
+    }
+
+    const checkedItems:Item[] = items.map(item => this.doItemNewAttributeCheck(item));
+    log.d('db.putObjectiveItems - checkedItems - ', checkedItems)
+
+    // await dynamoDB.transactWrite({
+    //   TransactItems: checkedItems.map(item => ({
+    //     Put: {
+    //       TableName: itemsTableName,
+    //       Items: item
+    //     }
+    //   })
+    // )}).promise();
 
     for (let i = 0; i < items.length; i++) {
       items[i].UserIdObjectiveId = userId + ((items[i].UserIdObjectiveId.length > 40) ? items[i].UserIdObjectiveId.slice(-40) : items[i].UserIdObjectiveId);
@@ -298,18 +329,22 @@ const db = {
       if(items[i].ItemId === "") items[i].ItemId = generateId();
 
       const newItem:Objective = this.doItemNewAttributeCheck(items[i]);
+      log.d('db.putObjectiveItems - newItem - ', newItem)
 
       const params = {
         TableName: itemsTableName,
         Item: { ...newItem }
       }
       await dynamoDB.put(params).promise();
+
+      log.d('db.putObjectiveItems - newItem - ok')
     }
     
+    log.d('db.putObjectiveItems - newItem - ok')
     return true;
   },
-  async deleteObjectiveItems(userId:string, items: Item[]): Promise<boolean>{ // TODO needs treatment for partial delete
-    if(items.length > 10) return false;
+  async deleteObjectiveItems(userId:string, items: Item[]): Promise<Item[]|null>{ // TODO needs treatment for partial delete
+    if(items.length > 10) return null;
 
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
@@ -323,7 +358,7 @@ const db = {
       await dynamoDB.delete(params).promise();
     }
 
-    return true;
+    return items;
   },
   async syncObjectivesList(userId: string, objectivesList: ObjectiveList): Promise<ObjectiveList|null> {
     try {
@@ -575,6 +610,7 @@ const db = {
     //   return response;
     // }
   },
+  
   async postDeviceData(deviceData: DeviceData[]){
     // try {
     //   let now = new Date();

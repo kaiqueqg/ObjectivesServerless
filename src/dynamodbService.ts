@@ -1,12 +1,13 @@
 import { GetItemOutput, QueryOutput } from "aws-sdk/clients/dynamodb";
 import log from "./log";
-import { Codes, DefaultDivider, DefaultExercise, DefaultGrocery, DefaultHouse, DefaultImage, DefaultItem, DefaultLink, DefaultLocation, DefaultMedicine, DefaultNote, DefaultObjective, DefaultQuestion, DefaultResponse, DefaultStep, DefaultWait, DeviceData, InternalServerError, Item, ItemType, Objective, ObjectiveList, Response, Service, StepImportance } from "./types";
+import { checkItem, checkObjective, Codes, DefaultDivider, DefaultExercise, DefaultGrocery, DefaultHouse, DefaultImage, DefaultItem, DefaultLink, DefaultLocation, DefaultMedicine, DefaultNote, DefaultObjective, DefaultQuestion, DefaultResponse, DefaultStep, DefaultWait, DeviceData, InternalServerError, isItemIDValid, isObjectiveIDValid, isUserIdObjectiveIDValid, isUserIDValid, Item, ItemType, Objective, ObjectivesList, Response, Service, StepImportance } from "./types";
+import { MAX_ITEMS_PER_REQUEST, MAX_OBJECTIVES_PER_REQUEST } from './index'
 
 const AWS = require('aws-sdk');
 const dynamoDB = new AWS.DynamoDB.DocumentClient();
-const objectivesTableName = process.env.DB_TABLE_OBJECTIVES;
-const itemsTableName = process.env.DB_TABLE_OBJECTIVE_ITEMS;
-const servicesTableName = process.env.DB_TABLE_SERVICES;
+const objectivesTableName = process.env.DB_TABLE_OBJECTIVES??'';
+const itemsTableName = process.env.DB_TABLE_OBJECTIVE_ITEMS??'';
+const servicesTableName = process.env.DB_TABLE_SERVICES??'';
 
 //temp
 const deviceTableName = process.env.DB_TABLE_DEVICE;
@@ -24,240 +25,108 @@ const db = {
     return true;
   },
 
-  //^ No better solution, just check on get if missing attributes exist, if not, default 
-  doObjectiveNewAttributeCheck(obj: Objective): Objective {
-    const safe: Partial<Objective> = {
-      UserId: obj.UserId,
-      ObjectiveId: obj.ObjectiveId,
-      Title: obj.Title,
-      Done: obj.Done,
-      Theme: obj.Theme,
-      IsArchived: obj.IsArchived,
-      IsLocked: obj.IsLocked,
-      LastModified: obj.LastModified,
-      Pos: obj.Pos,
-      IsShowing: obj.IsShowing,
-      IsShowingCheckedGrocery: obj.IsShowingCheckedGrocery,
-      IsShowingCheckedStep: obj.IsShowingCheckedStep,
-      IsShowingCheckedMedicine: obj.IsShowingCheckedMedicine,
-      IsShowingCheckedExercise: obj.IsShowingCheckedExercise,
-      Tags: obj.Tags,
-    };
-    
-    return {...DefaultObjective, ...safe};
-  },
-
-  
-  doItemNewAttributeCheck(item: any): any {
-    const base: Item = {
-      ItemId: typeof item.ItemId === 'string' ? item.ItemId : '',
-      UserIdObjectiveId: typeof item.UserIdObjectiveId === 'string' ? item.UserIdObjectiveId : '',
-      Type: Object.values(ItemType).includes(item.Type) ? item.Type : ItemType.Step,
-      Pos: typeof item.Pos === 'number' ? item.Pos : 0,
-      LastModified: typeof item.LastModified === 'string' ? item.LastModified : '',
-    };
-
-    switch (base.Type) {
-      case ItemType.Step:
-        return {
-          ...DefaultStep,
-          ...base,
-          Title: typeof item.Title === 'string' ? item.Title : '',
-          Done: typeof item.Done === 'boolean' ? item.Done : false,
-          Importance: typeof item.Importance === 'number' ? item.Importance : StepImportance.None,
-          AutoDestroy: typeof item.AutoDestroy === 'boolean' ? item.AutoDestroy : false,
-        };
-
-      case ItemType.Wait:
-        return {
-          ...DefaultWait,
-          ...base,
-          Title: typeof item.Title === 'string' ? item.Title : '',
-        };
-
-      case ItemType.Question:
-        return {
-          ...DefaultQuestion,
-          ...base,
-          Statement: typeof item.Statement === 'string' ? item.Statement : '',
-          Answer: typeof item.Answer === 'string' ? item.Answer : '',
-        };
-
-      case ItemType.Note:
-        return {
-          ...DefaultNote,
-          ...base,
-          Text: typeof item.Text === 'string' ? item.Text : '',
-        };
-
-      case ItemType.Location:
-        return {
-          ...DefaultLocation,
-          ...base,
-          Title: typeof item.Title === 'string' ? item.Title : '',
-          Url: typeof item.Url === 'string' ? item.Url : '',
-          IsShowingMap: typeof item.IsShowingMap === 'boolean' ? item.IsShowingMap : false,
-        };
-
-      case ItemType.Divider:
-        return {
-          ...DefaultDivider,
-          ...base,
-          Title: typeof item.Title === 'string' ? item.Title : '',
-          IsOpen: typeof item.IsOpen === 'boolean' ? item.IsOpen : true,
-        };
-
-      case ItemType.Grocery:
-        return {
-          ...DefaultGrocery,
-          ...base,
-          Title: typeof item.Title === 'string' ? item.Title : '',
-          IsChecked: typeof item.IsChecked === 'boolean' ? item.IsChecked : false,
-          Quantity: typeof item.Quantity === 'number' ? item.Quantity : 0,
-          Unit: typeof item.Unit === 'string' ? item.Unit : '',
-          GoodPrice: typeof item.GoodPrice === 'string' ? item.GoodPrice : '',
-        };
-
-      case ItemType.Medicine:
-        return {
-          ...DefaultMedicine,
-          ...base,
-          Title: typeof item.Title === 'string' ? item.Title : '',
-          IsChecked: typeof item.IsChecked === 'boolean' ? item.IsChecked : false,
-          Quantity: typeof item.Quantity === 'number' ? item.Quantity : 0,
-          Unit: typeof item.Unit === 'string' ? item.Unit : '',
-          Purpose: typeof item.Purpose === 'string' ? item.Purpose : '',
-          Components: Array.isArray(item.Components) ? item.Components : [],
-        };
-
-      case ItemType.Exercise:
-        return {
-          ...DefaultExercise,
-          ...base,
-          Title: typeof item.Title === 'string' ? item.Title : '',
-          IsDone: typeof item.IsDone === 'boolean' ? item.IsDone : false,
-          Reps: typeof item.Reps === 'number' ? item.Reps : 0,
-          Series: typeof item.Series === 'number' ? item.Series : 0,
-          MaxWeight: typeof item.MaxWeight === 'string' ? item.MaxWeight : '',
-          Description: typeof item.Description === 'string' ? item.Description : '',
-          Weekdays: Array.isArray(item.Weekdays) ? item.Weekdays : [],
-          LastDone: typeof item.LastDone === 'string' ? item.LastDone : '',
-          BodyImages: Array.isArray(item.BodyImages) ? item.BodyImages : [],
-        };
-
-      case ItemType.Link:
-        return {
-          ...DefaultLink,
-          ...base,
-          Title: typeof item.Title === 'string' ? item.Title : '',
-          Link: typeof item.Link === 'string' ? item.Link : '',
-        };
-
-      case ItemType.Image:
-        return {
-          ...DefaultImage,
-          ...base,
-          Title: typeof item.Title === 'string' ? item.Title : '',
-          Name: typeof item.Name === 'string' ? item.Name : '',
-          Size: typeof item.Size === 'number' ? item.Size : 0,
-          Width: typeof item.Width === 'number' ? item.Width : 0,
-          Height: typeof item.Height === 'number' ? item.Height : 0,
-          IsDisplaying: typeof item.IsDisplaying === 'boolean' ? item.IsDisplaying : true,
-        };
-
-      case ItemType.House:
-        return {
-          ...DefaultHouse,
-          ...base,
-          Title: typeof item.Title === 'string' ? item.Title : '',
-          Listing: typeof item.Listing === 'string' ? item.Listing : '',
-          MapLink: typeof item.MapLink === 'string' ? item.MapLink : '',
-          MeterSquare: typeof item.MeterSquare === 'string' ? item.MeterSquare : '',
-          Rating: typeof item.Rating === 'number' ? item.Rating : 0,
-          Address: typeof item.Address === 'string' ? item.Address : '',
-          TotalPrice: typeof item.TotalPrice === 'number' ? item.TotalPrice : 0,
-          WasContacted: typeof item.WasContacted === 'boolean' ? item.WasContacted : true,
-          Details: typeof item.Details === 'string' ? item.Details : '',
-          Attention: typeof item.Attention === 'string' ? item.Attention : '',
-        };
-
-      case ItemType.ItemFake:
-      default:
-        return { ...DefaultItem, ...base };
-    }
-  },
-
-  //OK for response
+  //! pagination
+  ///type ID - length ID - injection
   async queryObjectiveList(userId: string): Promise<QueryOutput> {
-    const params = {
+    if (!isUserIDValid(userId)) {
+      throw new Error('Invalid userId');
+    }
+    const params: AWS.DynamoDB.DocumentClient.QueryInput = {
       TableName: objectivesTableName,
       KeyConditionExpression: "UserId = :UserId",
       ExpressionAttributeValues: {
         ":UserId": userId,
       },
+      Limit: 200,
     };
 
     return await dynamoDB.query(params).promise();
   },
+  //! pagination
+  ///type ID - length ID - injection
+  async queryObjectiveItemList(userIdObjectiveId: string): Promise<QueryOutput> {
+    log.d('queryObjectiveItemList - start - ', userIdObjectiveId)
+    if (!isUserIdObjectiveIDValid(userIdObjectiveId)) {
+      log.d('queryObjectiveItemList - err - Invalid userIdObjectiveId')
+      throw new Error('Invalid userIdObjectiveId');
+    }
+  
+    const params: AWS.DynamoDB.DocumentClient.QueryInput = {
+      TableName: itemsTableName??'',
+      KeyConditionExpression: 'UserIdObjectiveId = :UserIdObjectiveId',
+      ExpressionAttributeValues: {
+          ':UserIdObjectiveId': userIdObjectiveId
+      },
+      Limit: 200,
+    };
+    const rtn = await dynamoDB.query(params).promise();
+    log.d('queryObjectiveItemList - rtn - ', rtn)
+    return rtn;
+  },
+
+  //! pagination
+  ///type ID - length ID - injection
   async getObjectiveList(userId: string): Promise<Objective[]|null>{
     const result = await this.queryObjectiveList(userId);
 
     if(result.Items){
       const objs = result.Items as unknown as  Objective[];
-      const newObjs = objs.map(obj => this.doObjectiveNewAttributeCheck(obj));
+      const newObjs = objs.map(obj => checkObjective(obj));
       return newObjs;
     }
 
     return null;
   },
-  async queryObjectiveItemList(userIdObjectiveId: string): Promise<QueryOutput> {
-    const params = {
-      TableName: itemsTableName,
-      KeyConditionExpression: 'UserIdObjectiveId = :UserIdObjectiveId',
-      ExpressionAttributeValues: {
-          ':UserIdObjectiveId': userIdObjectiveId
-      }
-    };
-    return await dynamoDB.query(params).promise();
-  },
+  //! pagination
+  ///type ID - length ID - injection
   async getObjectiveItemList(userIdObjectiveId: string): Promise<Item[]|null>{
     const result = await this.queryObjectiveItemList(userIdObjectiveId);
 
     if(result.Items){
       const items = result.Items as unknown as Item[];
-      const newItems = items.map(i => this.doItemNewAttributeCheck(i));
+      const newItems = items.map(i => checkItem(i));
       return newItems;
     }
 
     return null;
   },
+  //! pagination
+  ///type ID - length ID - injection
   async getObjective(userId: string, objectiveId: string): Promise<Objective|null>{
-    const params ={
+    if (!isUserIDValid(userId) || !isObjectiveIDValid(objectiveId)) return null;
+
+    const params:AWS.DynamoDB.DocumentClient.GetItemInput ={
       TableName: objectivesTableName,
-      Key:{ UserId: userId, ObjectiveId: objectiveId }
+      Key:{ UserId: userId, ObjectiveId: objectiveId },
     }
 
     const result:GetItemOutput = await dynamoDB.get(params).promise();
     if(result.Item){
-      return this.doObjectiveNewAttributeCheck(result.Item as unknown as Objective);;
+      return checkObjective(result.Item as unknown as Objective);
     }
     
     return null;
   },
+  
+  //! pagination
+  ///type ID - length ID - array length - injection
   async putObjectives(userId: string, objectives: Objective[]): Promise<boolean>{
-    if(objectives.length > 10) 
+    if (!isObjectiveIDValid(userId)) return false;
+
+    if(objectives.length > MAX_OBJECTIVES_PER_REQUEST) 
       return false;
 
     for (let i = 0; i < objectives.length; i++) {
       const obj = objectives[i];
 
-      //^ Make sure the correct userId
+      /// Make sure the correct userId
       obj.UserId = userId; 
       if(obj.ObjectiveId === "") obj.ObjectiveId = generateId();
+      else if(!isObjectiveIDValid(obj.ObjectiveId)) return false;
       
-      const newObj:Objective = this.doObjectiveNewAttributeCheck(obj);
+      const newObj:Objective = checkObjective(obj);
 
-      const params = {
+      const params: AWS.DynamoDB.DocumentClient.PutItemInput = {
         TableName: objectivesTableName,
         Item: { ...newObj }
       }
@@ -266,21 +135,25 @@ const db = {
     
     return true;
   },
+
+  //! pagination - objectives IDs
+  ///type ID - length ID - array length - injection
   async deleteObjectives(userId: string, objectives: Objective[]): Promise<Objective[]|null>{
-    if(objectives.length > 10) return null;
+    if (!isObjectiveIDValid(userId)) return null;
+    if(objectives.length > MAX_OBJECTIVES_PER_REQUEST) return null;
 
     for (let i = 0; i < objectives.length; i++) {
       const objective = objectives[i];
       
-      //^ First delete all Items of this Objective
+      /// First delete all Items of this Objective
       const result = await this.queryObjectiveItemList(userId+objective.ObjectiveId);
       const items = (result.Items ?? []) as unknown as Item[];
       if(result.Items && result.Items.length > 0){
         await this.deleteObjectiveItems(userId, items);
       }
 
-      //^Now delete Objective
-      const params = {
+      ///Now delete Objective
+      const params: AWS.DynamoDB.DocumentClient.DeleteItemInput = {
         TableName: objectivesTableName,
         Key: { UserId: userId, ObjectiveId: objective.ObjectiveId }
       };
@@ -290,8 +163,14 @@ const db = {
     
     return objectives;
   },
+
+  //! pagination
+  ///type ID - length ID - array length - injection
   async getObjectiveItem(userIdObjectiveId: string, itemId: string): Promise<Item|null>{
-    const params ={
+    if (!isUserIdObjectiveIDValid(userIdObjectiveId)) return null;
+    if (!isItemIDValid(itemId)) return null;
+
+    const params:AWS.DynamoDB.DocumentClient.GetItemInput ={
       TableName: itemsTableName,
       Key:{ UserIdObjectiveId: userIdObjectiveId, ItemId: itemId }
     }
@@ -299,59 +178,55 @@ const db = {
     const result = await dynamoDB.get(params).promise();
 
     if(result.Item){
-      return this.doItemNewAttributeCheck(result.Item);
+      return checkItem(result.Item);
     }
 
     return null;
   },
+
+  //! pagination - each Item IDs
+  ///type ID - length ID - array length - injection
   async putObjectiveItems(userId: string, items: Item[]): Promise<boolean>{ // TODO needs treatment for partial put
-    log.d('db.putObjectiveItems - ', items.length)
-    if(items.length > 10) {
-      log.d('db.putObjectiveItems - items array bigger than 10. ' + items.length)
+    if (!isUserIDValid(userId)) return false;
+    log.d('db.putObjectiveItems - ', userId, items);
+
+    if(items.length > MAX_ITEMS_PER_REQUEST) {
       return false;
     }
-
-    const checkedItems:Item[] = items.map(item => this.doItemNewAttributeCheck(item));
-    log.d('db.putObjectiveItems - checkedItems - ', checkedItems)
-
-    // await dynamoDB.transactWrite({
-    //   TransactItems: checkedItems.map(item => ({
-    //     Put: {
-    //       TableName: itemsTableName,
-    //       Items: item
-    //     }
-    //   })
-    // )}).promise();
+    log.d('db.putObjectiveItems - start', userId, items);
 
     for (let i = 0; i < items.length; i++) {
+      /// Garanties that it's the userId verified by JWT and got from Database and replaced on UserIdObjectiveId with only the ObjectiveId provided by the body.
       items[i].UserIdObjectiveId = userId + ((items[i].UserIdObjectiveId.length > 40) ? items[i].UserIdObjectiveId.slice(-40) : items[i].UserIdObjectiveId);
 
       if(items[i].ItemId === "") items[i].ItemId = generateId();
 
-      const newItem:Objective = this.doItemNewAttributeCheck(items[i]);
-      log.d('db.putObjectiveItems - newItem - ', newItem)
+      const newItem:Item = checkItem(items[i]);
 
-      const params = {
+      const params: AWS.DynamoDB.DocumentClient.PutItemInput = {
         TableName: itemsTableName,
         Item: { ...newItem }
       }
       await dynamoDB.put(params).promise();
-
-      log.d('db.putObjectiveItems - newItem - ok')
     }
+
+    log.d('db.putObjectiveItems - end');
     
-    log.d('db.putObjectiveItems - newItem - ok')
     return true;
   },
+
+  //! pagination - eah Item IDs
+  ///type ID - length ID - array length - injection
   async deleteObjectiveItems(userId:string, items: Item[]): Promise<Item[]|null>{ // TODO needs treatment for partial delete
-    if(items.length > 10) return null;
+    if (!isUserIDValid(userId)) return null;
+    if(items.length > MAX_ITEMS_PER_REQUEST) return null;
 
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       
       item.UserIdObjectiveId = userId + ((item.UserIdObjectiveId.length > 40) ? item.UserIdObjectiveId.slice(-40) : item.UserIdObjectiveId);
 
-      const params = {
+      const params: AWS.DynamoDB.DocumentClient.DeleteItemInput = {
         TableName: itemsTableName,
         Key: { UserIdObjectiveId: item.UserIdObjectiveId, ItemId: item.ItemId }
       };
@@ -360,30 +235,34 @@ const db = {
 
     return items;
   },
-  async syncObjectivesList(userId: string, objectivesList: ObjectiveList): Promise<ObjectiveList|null> {
+
+  //! pagination - eah Item IDs - array length
+  ///type ID - length ID - injection
+  async syncObjectivesList(userId: string, objectivesList: ObjectivesList, isGuest: boolean): Promise<ObjectivesList|null> {
+    if (!isUserIDValid(userId)) return null;
+
+    log.d('db.syncObjectivesList - start');
     try {
       //! GET DB ITEMS FOR LATER
       let dbItems: Item[] = [];
       let dbObjectives: Objective[] = [];
-
-      log.d('syncObjectivesList - userId', userId);
       const result: QueryOutput = await this.queryObjectiveList(userId);
-      log.d('syncObjectivesList - result', result);
+      log.d('db.syncObjectivesList - result - ', result);
       if(result.Items) {
         dbObjectives = result.Items as unknown as Objective[];
         for(let i = 0; i < dbObjectives.length; i++){
           const rtnItemList: QueryOutput = await this.queryObjectiveItemList(userId + dbObjectives[i].ObjectiveId);
+          log.d('db.syncObjectivesList - rtnItemList - ', rtnItemList); 
           
           if(rtnItemList.Items){
             dbItems.push(...(rtnItemList.Items as unknown as Item[]));
           }
         }
       }
-      log.d('syncObjectivesList - dbItems', dbItems);
-      log.d('syncObjectivesList - dbObjectives', dbObjectives);
+
 
       //! DELETE OBJECTIVES
-      if (objectivesList.DeleteObjectives?.length) {
+      if (objectivesList.DeleteObjectives?.length && !isGuest) {
         const deletedObjectives = objectivesList.DeleteObjectives.filter(
           o => o && o.ObjectiveId
         );
@@ -392,21 +271,11 @@ const db = {
           deletedObjectives.map(o => this.deleteObjectives(userId, [o]))
         );
 
-        log.d(`Deleted ${deletedObjectives.length} objectives`);
       }
-      // if(objectivesList.DeleteObjectives) {
-      //   const deletedObjectives = objectivesList.DeleteObjectives;
-      //   for(let i = 0; i < deletedObjectives.length; i++){
-      //     const deleteObjective = deletedObjectives[i];
-      //     if(deleteObjective && deleteObjective.ObjectiveId){
-      //       await this.deleteObjectives(userId, [deleteObjective]);
-      //     }
-      //   }
-      // }
-      log.d('db - obj deleted');
+      log.d('db.syncObjectivesList - delete obj');
 
       //! DELETE ITEMS
-      if (objectivesList.DeleteItems?.length) {
+      if (objectivesList.DeleteItems?.length && !isGuest) {
         const deletedItems = objectivesList.DeleteItems.filter(
           i => i && i.UserIdObjectiveId && i.ItemId
         );
@@ -414,19 +283,9 @@ const db = {
         await Promise.all(
           deletedItems.map(i => this.deleteObjectiveItems(userId, [i]))
         );
-
-        log.d(`Deleted ${deletedItems.length} items`);
       }
-      // if(objectivesList.DeleteItems) {
-      //   const deletedItems = objectivesList.DeleteItems;
-      //   for(let i = 0; i < deletedItems.length; i++){
-      //     const deleteItem = deletedItems[i];
-      //     if(deleteItem.UserIdObjectiveId && deleteItem.ItemId){
-      //       await this.deleteObjectiveItems(userId, [deleteItem]);
-      //     }
-      //   }
-      // }
-      log.d('db - deletedItems');
+
+      log.d('db.syncObjectivesList - delete items');
 
       //! PUT ITEMS
       if (objectivesList.Items?.length) {
@@ -452,34 +311,9 @@ const db = {
             }
           })
         );
+      }
 
-        log.d(`Synced ${items.length} items`);
-        }
-      // if(objectivesList.Items) {
-      //   let items = objectivesList.Items;
-      //   for(let i = 0; i < items.length; i++){
-      //     const item = items[i];
-      //     const equalIt = dbItems.find(it => it.UserIdObjectiveId === item.UserIdObjectiveId);
-          
-      //     if(equalIt && equalIt.LastModified && item.LastModified){
-      //       const syncDate: Date = new Date(item.LastModified);
-      //       const dbDate: Date = new Date(equalIt.LastModified);
-            
-      //       if(dbDate < syncDate) {
-      //         await this.putObjectiveItems(userId, [item]);
-      //         // log.d('Item updated', item);
-      //       }
-      //       else{
-      //         // log.d('Item: ' + item + ' was denied because of date comparion. ', dbDate.toISOString(), syncDate.toISOString());
-      //       }
-      //     }
-      //     else{
-      //       await this.putObjectiveItems(userId, [item]);
-      //       // log.d('else', item);
-      //     }
-      //   }
-      // }
-      log.d('db - items putted');
+      log.d('db.syncObjectivesList - putItems - ', objectivesList.Items);
 
       //! PUT OBJECTIVES
       if (objectivesList.Objectives?.length) {
@@ -509,55 +343,31 @@ const db = {
             }
           })
         );
-
-        log.d(`Synced ${objectives.length} objectives`);
       }
-      // if(objectivesList.Objectives) {
-      //   let objectives = objectivesList.Objectives;
-      //   for(let i = 0; i < objectives.length; i++){
-      //     const objective = objectives[i];
-      //     const equalCat = dbObjectives.find(cat => cat.ObjectiveId === objective.ObjectiveId);
-  
-      //     if(equalCat && equalCat.LastModified && objective.LastModified){
-      //       const dbDate: Date = new Date(equalCat.LastModified);
-      //       const syncDate: Date = new Date(objective.LastModified);
-  
-      //       if(dbDate < syncDate) {
-      //         await this.putObjectives(userId, [objective]);
-      //       }
-      //       else{
-      //         // log.d('Objective: ' + objective.Title + ' was denied because of date comparion. ', dbDate.toISOString(), syncDate.toISOString());
-      //       }
-      //     }
-      //     else{
-      //       await this.putObjectives(userId, [objective]);
-      //     }
-      //   }
-      // }
-      log.d('db - objs putted');
 
-      //^ Getting the final objective and item list
+      log.d('db.syncObjectivesList - objectivesList.Objectives - ', objectivesList.Objectives);
+
+      /// Getting the final objective and item list
       const queryObjectives: QueryOutput = await this.queryObjectiveList(userId);
-
+      log.d('db.syncObjectivesList - queryObjectives - ', queryObjectives);
       if(!queryObjectives.Items){
         return null
       }
-      
-      log.d('db - queryObjectives ', queryObjectives);
+
 
       let newObjectives: Objective[] = queryObjectives.Items as unknown as Objective[];
       let newItems: Item[] = []
       for(let i = 0; i < newObjectives.length; i++){
         const queryItems: QueryOutput = await this.queryObjectiveItemList(userId + newObjectives[i].ObjectiveId);
+      log.d('db.syncObjectivesList - queryItems - ', queryItems);
         if(!queryItems.Items)
           return null;
 
         newItems.push(...(queryItems.Items as unknown as Item[]));
       }
-      log.d('db - newItems ', newItems);
-
-      const rtnObjectiveList: ObjectiveList = {Objectives: newObjectives, Items: newItems}
-
+      
+      const rtnObjectiveList: ObjectivesList = {Objectives: newObjectives, Items: newItems}
+      log.d('db.syncObjectivesList - rtnObjectiveList - ', rtnObjectiveList);
       return rtnObjectiveList;
     } catch (err) {
       log.err('db.syncObjectivesList', 'err', err);
@@ -566,7 +376,7 @@ const db = {
   },
 
   async getService(): Promise<Service|null> {
-    const params = {
+    const params: AWS.DynamoDB.DocumentClient.GetItemInput = {
       TableName: servicesTableName,
       Key: { Name: 'GroceryListServerless' },
     };

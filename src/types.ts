@@ -1,4 +1,5 @@
 import { APIGatewayProxyResult } from "aws-lambda";
+import log from "./log";
 
 //------------------------- USER
 export interface DBUser{
@@ -10,16 +11,32 @@ export interface DBUser{
   Role: string,
 }
 
+export enum UserRoles{
+  Admin = 'Admin',
+  Basic = 'Basic',
+  Guest = 'Guest',
+  EmailToken = 'EmailToken',
+  TokenTester = 'TokenTester',
+}
+
+export enum UserStatus{
+  Active = 'Active',
+  WaitingApproval = 'WaitingApproval',
+  Refused = 'Refused',
+}
+
 //------------------------- TOKEN
 export interface AuthenticationRequest{
   JwtToken: string,
-  RoleRequired: string[],
+  RoleRequired: UserRoles[],
+  StatusRequired: UserStatus[],
 }
 
 export interface AuthenticationResponse{
   Authorized: boolean,
   Message: string,
   User: DBUser|null,
+  Error?: string,
 }
 
 export interface DBToken{
@@ -65,19 +82,19 @@ export const DefaultResponse: Response = {
   },
   body: '{}, message',
 }
-const CreateResponse = (statusCode:number, body: any, message?: string ): Response => {
-  console.log('CreateResponse ' + statusCode + ' - ' + JSON.stringify(body));
+const CreateResponse = (statusCode:number, body: any, message?: string, error?: string): Response => {
+  log.dend('CreateResponse ' + statusCode + ' - ' + JSON.stringify(body));
   return {
     ...DefaultResponse,
     statusCode,
     body: JSON.stringify({
       data: body,
-      message: message?? 'No information.'
+      message: message,
+      error: error,
     })
   }
 }
 export const Ok = (message?: string, body?: any) => {
-  console.log('Ok - ' + JSON.stringify(body));
   return CreateResponse(Codes.OK, body ?? {}, message);
 };
 
@@ -97,8 +114,8 @@ export const BadRequest = (message?: string, body?: any) => {
   return CreateResponse(Codes.BadRequest, body ?? {}, message);
 };
 
-export const Unauthorized = (message?: string, body?: any) => {
-  return CreateResponse(Codes.Unauthorized, body ?? {}, message);
+export const Unauthorized = (authResp: AuthenticationResponse) => {
+  return CreateResponse(Codes.Unauthorized, {}, authResp.Message??'No message provided.', authResp.Error?? 'No error provided.');
 };
 
 export const Forbidden = (message?: string, body?: any) => {
@@ -137,8 +154,212 @@ export enum LogLevel {
   None  
 }
 
-//------------------------- GROCERY LIST
-export interface ObjectiveList{
+//------------------------- Objectives and Items
+export const isUserIDValid = (userId: string): boolean => {
+  if(typeof userId !== 'string') return false;
+  return /^[a-zA-Z0-9_-]{40}$/.test(userId);
+}
+
+export const isObjectiveIDValid = (objectiveId: string): boolean => {
+  if(typeof objectiveId !== 'string') return false;
+  return /^[a-zA-Z0-9_-]{40}$/.test(objectiveId);
+}
+
+export const isItemIDValid = (itemId: string): boolean => {
+  if(typeof itemId !== 'string') return false;
+  return /^[a-zA-Z0-9_-]{40}$/.test(itemId);
+}
+
+export const isUserIdObjectiveIDValid = (userIdObjectiveId: string): boolean => {
+  if(typeof userIdObjectiveId !== 'string') return false;
+  return /^[a-zA-Z0-9_-]{80}$/.test(userIdObjectiveId);
+}
+
+export const checkObjective = (o: Objective): Objective => {
+  return(
+    {
+      UserId: String(o.UserId ?? ''),
+      ObjectiveId: String(o.ObjectiveId ?? ''),
+      Title: String(o.Title ?? ''),
+      Done: Boolean(o.Done ?? false),
+      Theme: String(o.Theme ?? ''),
+      IsArchived: Boolean(o.IsArchived ?? false),
+      IsShowing: Boolean(o.IsShowing ?? true),
+      IsLocked: Boolean(o.IsLocked ?? false),
+      LastModified: String(o.LastModified ?? new Date().toISOString()),
+      Pos: Number(o.Pos ?? 0),
+      IsShowingCheckedGrocery: Boolean(o.IsShowingCheckedGrocery ?? false),
+      IsShowingCheckedStep: Boolean(o.IsShowingCheckedStep ?? false),
+      IsShowingCheckedMedicine: Boolean(o.IsShowingCheckedMedicine ?? false),
+      IsShowingCheckedExercise: Boolean(o.IsShowingCheckedExercise ?? false),
+      Tags: Array.isArray(o.Tags) ? o.Tags.map(String) : [],
+    }
+  )
+}
+
+
+
+export const checkItem = (i: Item): Item => {
+  // const NumberToStringMap = [
+  //   ItemType.Step,      // 0
+  //   ItemType.Wait,      // 1
+  //   ItemType.Question,  // 2
+  //   ItemType.Note,      // 3
+  //   ItemType.Location,  // 4
+  //   ItemType.Divider,   // 5
+  //   ItemType.Grocery,   // 6
+  //   ItemType.Medicine,  // 7
+  //   ItemType.Exercise,  // 8
+  //   ItemType.Link,      // 9
+  //   ItemType.ItemFake,  // 10
+  //   ItemType.Image,     // 11
+  //   ItemType.House      // 12
+  // ];
+  // const typeValue = (() => {
+  //   if (typeof i.Type === 'string' && i.Type in ItemType) {
+  //     return i.Type as ItemType;
+  //   }
+
+  //   if (typeof i.Type === 'number' && NumberToStringMap[i.Type]) {
+  //     return NumberToStringMap[i.Type];
+  //   }
+
+  //   return ItemType.Note;
+  // })();
+
+  const base: Item = {
+    ItemId: String(i.ItemId ?? ''),
+    UserIdObjectiveId: String(i.UserIdObjectiveId ?? ''),
+    Type: Number.isInteger(i.Type) ? i.Type : ItemType.Note,//typeValue,
+    Pos: Number(i.Pos ?? 0),
+    LastModified: String(i.LastModified ?? new Date().toISOString()),
+  };
+
+  switch (base.Type) {
+    case ItemType.Step:
+      return {
+        ...base,
+        Title: String((i as Step).Title ?? ''),
+        Done: Boolean((i as Step).Done ?? false),
+        Importance: Number((i as Step).Importance ?? StepImportance.None),
+        AutoDestroy: Boolean((i as Step).AutoDestroy ?? false),
+      } as Step;
+
+    case ItemType.Wait:
+      return {
+        ...base,
+        Title: String((i as Wait).Title ?? ''),
+      } as Wait;
+
+    case ItemType.Note:
+      return {
+        ...base,
+        Text: String((i as Note).Text ?? ''),
+      } as Note;
+
+    case ItemType.Question:
+      return {
+        ...base,
+        Statement: String((i as Question).Statement ?? ''),
+        Answer: String((i as Question).Answer ?? ''),
+      } as Question;
+
+    case ItemType.Location:
+      return {
+        ...base,
+        Title: String((i as Location).Title ?? ''),
+        Url: String((i as Location).Url ?? ''),
+        IsShowingMap: Boolean((i as Location).IsShowingMap ?? false),
+      } as Location;
+
+    case ItemType.Divider:
+      return {
+        ...base,
+        Title: String((i as Divider).Title ?? ''),
+        IsOpen: Boolean((i as Divider).IsOpen ?? false),
+      } as Divider;
+
+    case ItemType.Grocery:
+      return {
+        ...base,
+        Title: String((i as Grocery).Title ?? ''),
+        IsChecked: Boolean((i as Grocery).IsChecked ?? false),
+        Quantity: Number((i as Grocery).Quantity ?? 0),
+        Unit: String((i as Grocery).Unit ?? ''),
+        GoodPrice: String((i as Grocery).GoodPrice ?? ''),
+      } as Grocery;
+
+    case ItemType.Medicine:
+      return {
+        ...base,
+        Title: String((i as Medicine).Title ?? ''),
+        IsChecked: Boolean((i as Medicine).IsChecked ?? false),
+        Quantity: Number((i as Medicine).Quantity ?? 0),
+        Unit: String((i as Medicine).Unit ?? ''),
+        Purpose: String((i as Medicine).Purpose ?? ''),
+        Components: (i as Medicine).Components?.map(String) ?? [],
+      } as Medicine;
+
+    case ItemType.Exercise:
+      return {
+        ...base,
+        Title: String((i as Exercise).Title ?? ''),
+        IsDone: Boolean((i as Exercise).IsDone ?? false),
+        Reps: Number((i as Exercise).Reps ?? 0),
+        Series: Number((i as Exercise).Series ?? 0),
+        MaxWeight: String((i as Exercise).MaxWeight ?? ''),
+        Description: String((i as Exercise).Description ?? ''),
+        Weekdays: Array.isArray((i as Exercise).Weekdays)
+          ? (i as Exercise).Weekdays.map(Number)
+          : [],
+        LastDone: String((i as Exercise).LastDone ?? ''),
+        BodyImages: Array.isArray((i as Exercise).BodyImages)
+          ? (i as Exercise).BodyImages.map(String)
+          : [],
+      } as Exercise;
+
+    case ItemType.Link:
+      return {
+        ...base,
+        Title: String((i as Link).Title ?? ''),
+        Link: String((i as Link).Link ?? ''),
+      } as Link;
+
+    case ItemType.Image:
+      return {
+        ...base,
+        Title: String((i as Image).Title ?? ''),
+        Name: String((i as Image).Name ?? ''),
+        Size: Number((i as Image).Size ?? 0),
+        Width: Number((i as Image).Width ?? 0),
+        Height: Number((i as Image).Height ?? 0),
+        IsDisplaying: Boolean((i as Image).IsDisplaying ?? false),
+      } as Image;
+
+    case ItemType.House:
+      return {
+        ...base,
+        Title: String((i as House).Title ?? ''),
+        Listing: String((i as House).Listing ?? ''),
+        MapLink: String((i as House).MapLink ?? ''),
+        MeterSquare: String((i as House).MeterSquare ?? ''),
+        Rating: Number((i as House).Rating ?? 0),
+        Address: String((i as House).Address ?? ''),
+        TotalPrice: Number((i as House).TotalPrice ?? 0),
+        WasContacted: Boolean((i as House).WasContacted ?? false),
+        Details: String((i as House).Details ?? ''),
+        Attention: String((i as House).Attention ?? ''),
+      } as House;
+
+    case ItemType.ItemFake:
+      return { ...base } as Item;
+
+    default:
+      return base;
+  }
+};
+
+export interface ObjectivesList{
   Objectives?: Objective[],
   Items?: Item[],
   DeleteObjectives?: Objective[],
@@ -214,6 +435,21 @@ export interface ImageInfo {
 export interface PresignedUrl { url: string }
 
 export enum ItemType{ Step, Wait, Question, Note, Location, Divider, Grocery, Medicine, Exercise, Link, ItemFake, Image, House }
+// export enum ItemType {
+//   Step = 'Step',
+//   Wait = 'Wait',
+//   Question = 'Question',
+//   Note = 'Note',
+//   Location = 'Location',
+//   Divider = 'Divider',
+//   Grocery = 'Grocery',
+//   Medicine = 'Medicine',
+//   Exercise = 'Exercise',
+//   Link = 'Link',
+//   ItemFake = 'ItemFake',
+//   Image = 'Image',
+//   House = 'House'
+// }
 
 export interface Item {
   ItemId: string,
@@ -222,7 +458,6 @@ export interface Item {
   Pos: number,
   LastModified: string,
 }
-
 export const DefaultItem: Item = {
   ItemId: '',
   UserIdObjectiveId: '',
@@ -249,7 +484,6 @@ export interface Step extends Item {
   Importance: StepImportance,
   AutoDestroy: boolean,
 }
-
 export const DefaultStep: Step = {
   ...DefaultItem,
   Title: '',
@@ -261,7 +495,6 @@ export const DefaultStep: Step = {
 export interface Wait extends Item {
   Title: string,
 }
-
 export const DefaultWait: Wait = {
   ...DefaultItem,
   Title: '',
@@ -270,7 +503,6 @@ export const DefaultWait: Wait = {
 export interface Note extends Item {
   Text: string,
 }
-
 export const DefaultNote: Note = {
   ...DefaultItem,
   Text: '',
@@ -280,7 +512,6 @@ export interface Question extends Item {
   Statement: string,
   Answer: string,
 }
-
 export const DefaultQuestion: Question = {
   ...DefaultItem,
   Statement: '',
@@ -292,7 +523,6 @@ export interface Location extends Item {
   Url: string,
   IsShowingMap: boolean,
 }
-
 export const DefaultLocation: Location = {
   ...DefaultItem,
   Title: '',
@@ -304,7 +534,6 @@ export interface Divider extends Item {
   Title: string,
   IsOpen: boolean,
 }
-
 export const DefaultDivider: Divider = {
   ...DefaultItem,
   Title: '',
@@ -318,7 +547,6 @@ export interface Grocery extends Item {
   Unit?: string,
   GoodPrice?: string,
 }
-
 export const DefaultGrocery: Grocery = {
   ...DefaultItem,
   Title: '',
@@ -336,7 +564,6 @@ export interface Medicine extends Item{
   Purpose?: string,
   Components?: string[],
 }
-
 export const DefaultMedicine: Medicine = {
   ...DefaultItem,
   Title: '',
@@ -347,9 +574,7 @@ export const DefaultMedicine: Medicine = {
   Components: [],
 }
 
-
 export enum Weekdays{ Sunday, Monday, Tuesday, Wednesday, Thursday, Friday, Saturday }
-
 export interface Exercise extends Item{
   Title: string,
   IsDone: boolean,
@@ -361,7 +586,6 @@ export interface Exercise extends Item{
   LastDone: string,
   BodyImages: string[],
 }
-
 export const DefaultExercise: Exercise = {
   ...DefaultItem,
   Title: '',
@@ -379,7 +603,6 @@ export interface Link extends Item{
   Title: string,
   Link: string,
 }
-
 export const DefaultLink: Link = {
   ...DefaultItem,
   Title: '',
@@ -394,7 +617,6 @@ export interface Image extends Item{
   Height: number,
   IsDisplaying: boolean;
 }
-
 export const DefaultImage: Image = {
   ...DefaultItem,
   Title: '',
@@ -417,7 +639,6 @@ export interface House extends Item{
   Details: '',
   Attention: '',
 }
-
 export const DefaultHouse: House = {
   ...DefaultItem,
   Title: '',
